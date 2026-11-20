@@ -32,7 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends     ca-certific
 WORKDIR /app
 COPY --from=onnxruntime /out/ /usr/lib/
 COPY --from=libjpeg /out/opt/libjpeg-turbo/lib64/libjpeg.so* /opt/libjpeg-turbo/lib64/
-COPY --from=libjpeg /out/opt/libjpeg-turbo/share/doc /opt/libjpeg-turbo/share/doc
+COPY --from=libjpeg /out/usr/share/doc/libjpeg-turbo-official-3.1.4.1/LICENSE.md /usr/share/doc/libjpeg-turbo/LICENSE.md
 RUN echo '/opt/libjpeg-turbo/lib64' > /etc/ld.so.conf.d/00-libjpeg-turbo.conf && ldconfig
 COPY --from=build /out/captcha-tools /app/captcha-tools
 COPY model/ /app/model/
