@@ -1,0 +1,11 @@
+captcha-tools
+captcha-tools.exe
+*.test
+coverage.out
+logs/
+img_2_val/
+img_saved/
+.onnxruntime/
+.gocache/
+**/.gocache/
+__pycache__/

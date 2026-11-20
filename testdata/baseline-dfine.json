@@ -1,0 +1,75 @@
+{
+  "group": "dfine",
+  "python": "3.12.14 (main, Sep  1 2026, 14:17:39) [MSC v.1944 64 bit (AMD64)]",
+  "models": "dfine",
+  "records": [
+    {
+      "file": "00f58d85239040eea15a403d9426669b.jpg",
+      "bytes": 59460,
+      "centers": [],
+      "points": []
+    },
+    {
+      "file": "0693707f08b44825b155ee8d72897d70.jpg",
+      "bytes": 49290,
+      "centers": [],
+      "points": []
+    },
+    {
+      "file": "31158834904c4b808089058d39d239de.jpg",
+      "bytes": 55058,
+      "centers": [
+        [
+          310.8954772949219,
+          258.2187194824219
+        ]
+      ],
+      "points": [
+        "9336_7754"
+      ]
+    },
+    {
+      "file": "6d4753c615e54299863d837a321dea9c.jpg",
+      "bytes": 60407,
+      "centers": [],
+      "points": []
+    },
+    {
+      "file": "73fa08e2f40242a9b1b82c2a478e0ee8.jpg",
+      "bytes": 56707,
+      "centers": [],
+      "points": []
+    },
+    {
+      "file": "933762ddd6054c13a4d90740180afe51.jpg",
+      "bytes": 45717,
+      "centers": [],
+      "points": []
+    },
+    {
+      "file": "9aa1728546524a7a8856cbb5db789880.jpg",
+      "bytes": 62877,
+      "centers": [],
+      "points": []
+    },
+    {
+      "file": "d62f7aa9402547c4b17eecde127f10de.jpg",
+      "bytes": 49023,
+      "centers": [],
+      "points": []
+    },
+    {
+      "file": "f105965489de434e930fa1ef8a5bcd9f.jpg",
+      "bytes": 57405,
+      "centers": [
+        [
+          247.95663452148438,
+          296.1573791503906
+        ]
+      ],
+      "points": [
+        "7446_8894"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "group": "dfine",
+  "records": 9,
+  "passed": 9,
+  "comparisons": [
+    {
+      "file": "00f58d85239040eea15a403d9426669b.jpg",
+      "pass": true,
+      "duration": "491.6962ms",
+      "max_center_delta": 0
+    },
+    {
+      "file": "0693707f08b44825b155ee8d72897d70.jpg",
+      "pass": true,
+      "duration": "55.5301ms",
+      "max_center_delta": 0
+    },
+    {
+      "file": "31158834904c4b808089058d39d239de.jpg",
+      "pass": true,
+      "duration": "51.8859ms",
+      "max_center_delta": 0
+    },
+    {
+      "file": "6d4753c615e54299863d837a321dea9c.jpg",
+      "pass": true,
+      "duration": "49.2189ms",
+      "max_center_delta": 0
+    },
+    {
+      "file": "73fa08e2f40242a9b1b82c2a478e0ee8.jpg",
+      "pass": true,
+      "duration": "54.8784ms",
+      "max_center_delta": 0
+    },
+    {
+      "file": "933762ddd6054c13a4d90740180afe51.jpg",
+      "pass": true,
+      "duration": "48.4629ms",
+      "max_center_delta": 0
+    },
+    {
+      "file": "9aa1728546524a7a8856cbb5db789880.jpg",
+      "pass": true,
+      "duration": "48.8237ms",
+      "max_center_delta": 0
+    },
+    {
+      "file": "d62f7aa9402547c4b17eecde127f10de.jpg",
+      "pass": true,
+      "duration": "50.5928ms",
+      "max_center_delta": 0
+    },
+    {
+      "file": "f105965489de434e930fa1ef8a5bcd9f.jpg",
+      "pass": true,
+      "duration": "50.7602ms",
+      "max_center_delta": 0
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+services:
+  captcha-tools-go:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: captcha-tools-go:local
+    container_name: captcha-tools-go
+    init: true
+    restart: unless-stopped
+    ports:
+      - "19645:9645"
+    environment:
+      use_pdl: "1"
+      use_dfine: "1"
+      use_multi: "1"
+      MODEL_PRELOAD: "false"
+      MODEL_IDLE_TIMEOUT: "10m"
+      LOG_LEVEL: "INFO"
+      DINO_RANDOM_OFFSET: "1"
+    volumes:
+      - captcha-go-saved:/app/img_saved
+      - captcha-go-logs:/app/logs
+    tmpfs:
+      - /app/img_2_val:rw,noexec,nosuid,size=256m
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  captcha-go-saved:
+  captcha-go-logs:

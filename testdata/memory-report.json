@@ -1,0 +1,262 @@
+{
+  "groups": [
+    {
+      "group": "pdl",
+      "cycles": 12,
+      "first_call": "508.7852ms",
+      "mean_reload": "457.755718ms",
+      "max_reload": "505.0976ms",
+      "first_rss_bytes": 45645824,
+      "last_rss_bytes": 51773440,
+      "min_rss_bytes": 45645824,
+      "max_rss_bytes": 52084736,
+      "samples": [
+        {
+          "cycle": 1,
+          "rss_bytes": 45645824,
+          "heap_alloc_bytes": 8090056,
+          "heap_sys_bytes": 16547840
+        },
+        {
+          "cycle": 2,
+          "rss_bytes": 51568640,
+          "heap_alloc_bytes": 8079128,
+          "heap_sys_bytes": 20709376
+        },
+        {
+          "cycle": 3,
+          "rss_bytes": 50823168,
+          "heap_alloc_bytes": 8084816,
+          "heap_sys_bytes": 20676608
+        },
+        {
+          "cycle": 4,
+          "rss_bytes": 51494912,
+          "heap_alloc_bytes": 8085984,
+          "heap_sys_bytes": 20676608
+        },
+        {
+          "cycle": 5,
+          "rss_bytes": 50970624,
+          "heap_alloc_bytes": 8086592,
+          "heap_sys_bytes": 20643840
+        },
+        {
+          "cycle": 6,
+          "rss_bytes": 51642368,
+          "heap_alloc_bytes": 8086832,
+          "heap_sys_bytes": 20643840
+        },
+        {
+          "cycle": 7,
+          "rss_bytes": 51994624,
+          "heap_alloc_bytes": 8092552,
+          "heap_sys_bytes": 20643840
+        },
+        {
+          "cycle": 8,
+          "rss_bytes": 52084736,
+          "heap_alloc_bytes": 8092664,
+          "heap_sys_bytes": 20643840
+        },
+        {
+          "cycle": 9,
+          "rss_bytes": 51519488,
+          "heap_alloc_bytes": 8092664,
+          "heap_sys_bytes": 20643840
+        },
+        {
+          "cycle": 10,
+          "rss_bytes": 51621888,
+          "heap_alloc_bytes": 8093512,
+          "heap_sys_bytes": 20643840
+        },
+        {
+          "cycle": 11,
+          "rss_bytes": 51666944,
+          "heap_alloc_bytes": 8098720,
+          "heap_sys_bytes": 20643840
+        },
+        {
+          "cycle": 12,
+          "rss_bytes": 51773440,
+          "heap_alloc_bytes": 8098848,
+          "heap_sys_bytes": 20643840
+        }
+      ]
+    },
+    {
+      "group": "dfine",
+      "cycles": 12,
+      "first_call": "418.2336ms",
+      "mean_reload": "415.942981ms",
+      "max_reload": "420.6315ms",
+      "first_rss_bytes": 53993472,
+      "last_rss_bytes": 44584960,
+      "min_rss_bytes": 44077056,
+      "max_rss_bytes": 69623808,
+      "samples": [
+        {
+          "cycle": 1,
+          "rss_bytes": 53993472,
+          "heap_alloc_bytes": 10996120,
+          "heap_sys_bytes": 20643840
+        },
+        {
+          "cycle": 2,
+          "rss_bytes": 56020992,
+          "heap_alloc_bytes": 13893168,
+          "heap_sys_bytes": 20643840
+        },
+        {
+          "cycle": 3,
+          "rss_bytes": 57155584,
+          "heap_alloc_bytes": 2462616,
+          "heap_sys_bytes": 24838144
+        },
+        {
+          "cycle": 4,
+          "rss_bytes": 49737728,
+          "heap_alloc_bytes": 2448840,
+          "heap_sys_bytes": 24838144
+        },
+        {
+          "cycle": 5,
+          "rss_bytes": 44077056,
+          "heap_alloc_bytes": 2448824,
+          "heap_sys_bytes": 24838144
+        },
+        {
+          "cycle": 6,
+          "rss_bytes": 44560384,
+          "heap_alloc_bytes": 2448936,
+          "heap_sys_bytes": 24838144
+        },
+        {
+          "cycle": 7,
+          "rss_bytes": 44716032,
+          "heap_alloc_bytes": 2448936,
+          "heap_sys_bytes": 24838144
+        },
+        {
+          "cycle": 8,
+          "rss_bytes": 44347392,
+          "heap_alloc_bytes": 2448984,
+          "heap_sys_bytes": 24838144
+        },
+        {
+          "cycle": 9,
+          "rss_bytes": 44412928,
+          "heap_alloc_bytes": 2449080,
+          "heap_sys_bytes": 24838144
+        },
+        {
+          "cycle": 10,
+          "rss_bytes": 44703744,
+          "heap_alloc_bytes": 2450824,
+          "heap_sys_bytes": 24805376
+        },
+        {
+          "cycle": 11,
+          "rss_bytes": 69623808,
+          "heap_alloc_bytes": 2450536,
+          "heap_sys_bytes": 24805376
+        },
+        {
+          "cycle": 12,
+          "rss_bytes": 44584960,
+          "heap_alloc_bytes": 2450536,
+          "heap_sys_bytes": 24805376
+        }
+      ]
+    },
+    {
+      "group": "multi",
+      "cycles": 12,
+      "first_call": "534.5944ms",
+      "mean_reload": "533.768327ms",
+      "max_reload": "558.6032ms",
+      "first_rss_bytes": 79167488,
+      "last_rss_bytes": 101097472,
+      "min_rss_bytes": 47173632,
+      "max_rss_bytes": 101097472,
+      "samples": [
+        {
+          "cycle": 1,
+          "rss_bytes": 79167488,
+          "heap_alloc_bytes": 2444288,
+          "heap_sys_bytes": 24805376
+        },
+        {
+          "cycle": 2,
+          "rss_bytes": 77193216,
+          "heap_alloc_bytes": 2445320,
+          "heap_sys_bytes": 24805376
+        },
+        {
+          "cycle": 3,
+          "rss_bytes": 81235968,
+          "heap_alloc_bytes": 2446368,
+          "heap_sys_bytes": 24772608
+        },
+        {
+          "cycle": 4,
+          "rss_bytes": 89354240,
+          "heap_alloc_bytes": 2448288,
+          "heap_sys_bytes": 24772608
+        },
+        {
+          "cycle": 5,
+          "rss_bytes": 47173632,
+          "heap_alloc_bytes": 2448528,
+          "heap_sys_bytes": 24772608
+        },
+        {
+          "cycle": 6,
+          "rss_bytes": 91226112,
+          "heap_alloc_bytes": 2930616,
+          "heap_sys_bytes": 24739840
+        },
+        {
+          "cycle": 7,
+          "rss_bytes": 91103232,
+          "heap_alloc_bytes": 2450096,
+          "heap_sys_bytes": 24739840
+        },
+        {
+          "cycle": 8,
+          "rss_bytes": 91189248,
+          "heap_alloc_bytes": 2620376,
+          "heap_sys_bytes": 24739840
+        },
+        {
+          "cycle": 9,
+          "rss_bytes": 92614656,
+          "heap_alloc_bytes": 2452064,
+          "heap_sys_bytes": 24707072
+        },
+        {
+          "cycle": 10,
+          "rss_bytes": 96178176,
+          "heap_alloc_bytes": 2453312,
+          "heap_sys_bytes": 24707072
+        },
+        {
+          "cycle": 11,
+          "rss_bytes": 99885056,
+          "heap_alloc_bytes": 2453296,
+          "heap_sys_bytes": 24707072
+        },
+        {
+          "cycle": 12,
+          "rss_bytes": 101097472,
+          "heap_alloc_bytes": 2454256,
+          "heap_sys_bytes": 24674304
+        }
+      ]
+    }
+  ],
+  "initial_rss_bytes": 8040448,
+  "final_rss_bytes": 101097472,
+  "note": "RSS includes native allocator/arena retention; growth alone is not classified as a leak."
+}
