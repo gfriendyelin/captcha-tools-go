@@ -12,7 +12,11 @@ COPY . .
 COPY --from=libjpeg /out/opt/libjpeg-turbo /opt/libjpeg-turbo
 ARG TARGETOS=linux
 ARG TARGETARCH
-RUN CGO_ENABLED=1 GOOS=$TARGETOS GOARCH=$TARGETARCH     CGO_CFLAGS="-I/opt/libjpeg-turbo/include"     CGO_LDFLAGS="-L/opt/libjpeg-turbo/lib64"     go build -trimpath -ldflags="-s -w -buildid=" -o /out/captcha-tools ./cmd/captcha-tools
+ENV CGO_ENABLED=1
+ENV CGO_CFLAGS="-I/opt/libjpeg-turbo/include"
+ENV CGO_LDFLAGS="-L/opt/libjpeg-turbo/lib64"
+RUN mkdir -p /out
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -buildid=" -o /out/captcha-tools ./cmd/captcha-tools
 
 FROM build AS test
 ENV LD_LIBRARY_PATH=/opt/libjpeg-turbo/lib64
