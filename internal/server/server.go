@@ -49,12 +49,47 @@ func New(options Options, level *slog.LevelVar) *Server {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
 
 type response struct {
+	status       int
+	body         json.RawMessage
+	pictureType  string
+	verifyStatus string
+	verifyResult string
+	passed       bool
+}
+
+type passResponseWriter struct {
+	http.ResponseWriter
 	status int
-	body   json.RawMessage
+}
+
+func (w *passResponseWriter) WriteHeader(status int) {
+	if w.status == 0 {
+		w.status = status
+	}
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *passResponseWriter) Write(body []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(body)
 }
 
 func (s *Server) passHandler(hutao bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		writer := &passResponseWriter{ResponseWriter: w}
+		w = writer
+		logResult := response{}
+		defer func() {
+			logResult.status = writer.status
+			if logResult.status == 0 {
+				logResult.status = http.StatusInternalServerError
+			}
+			logPassResult(r.Context(), r.URL.Path, logResult, time.Since(started))
+		}()
+
 		gt, challenge, ok := requiredGTChallenge(w, r)
 		if !ok {
 			return
@@ -81,6 +116,7 @@ func (s *Server) passHandler(hutao bool) http.HandlerFunc {
 			point = &value
 		}
 		result := s.handlePass(r.Context(), gt, challenge, saveResult, useV3, point)
+		logResult = result
 		if !hutao {
 			writeRaw(w, result.status, result.body)
 			return
@@ -104,6 +140,17 @@ func (s *Server) passHandler(hutao bool) http.HandlerFunc {
 
 func (s *Server) handlePass(ctx context.Context, gt, challenge string, saveResult, useV3 bool, point *float64) (result response) {
 	started := time.Now()
+	pictureType := ""
+	verifyStatus := ""
+	verifyResult := ""
+	passed := false
+	defer func() {
+		result.pictureType = pictureType
+		result.verifyStatus = verifyStatus
+		result.verifyResult = verifyResult
+		result.passed = passed
+	}()
+
 	if s.predictor == nil || s.flows == nil || s.store == nil {
 		return errorResponse(fmt.Errorf("service is not fully configured"))
 	}
@@ -125,6 +172,7 @@ func (s *Server) handlePass(ctx context.Context, gt, challenge string, saveResul
 	if err != nil {
 		return errorResponse(err)
 	}
+	pictureType = picture.Type
 	name, err := storage.FilenameFromResource(picture.Name)
 	if err != nil {
 		return errorResponse(err)
@@ -194,14 +242,69 @@ func (s *Server) handlePass(ctx context.Context, gt, challenge string, saveResul
 	if decoded == nil {
 		return errorResponse(fmt.Errorf("verify response must be a JSON object"))
 	}
+	verifyStatus, verifyResult, passed = verifyOutcome(decoded)
 	if saveResult {
 		data, _ := decoded["data"].(map[string]any)
-		_, passed := data["validate"]
-		if err := workspace.Commit(picture.Type, passed); err != nil {
+		_, savePassed := data["validate"]
+		if err := workspace.Commit(picture.Type, savePassed); err != nil {
 			return errorResponse(err)
 		}
 	}
 	return response{status: 200, body: append(json.RawMessage(nil), raw...)}
+}
+
+func verifyOutcome(decoded map[string]any) (status, result string, passed bool) {
+	status, _ = decoded["status"].(string)
+	data, ok := decoded["data"].(map[string]any)
+	if !ok {
+		return status, "", false
+	}
+	result, _ = data["result"].(string)
+	if status == "success" {
+		_, passed = data["validate"]
+	}
+	return status, result, passed
+}
+
+func modelGroupForPicture(pictureType string) string {
+	switch pictureType {
+	case "nine":
+		return "pdl"
+	case "icon":
+		return "multi"
+	case "icon1":
+		return "dfine"
+	default:
+		return "unknown"
+	}
+}
+
+func logPassResult(ctx context.Context, route string, result response, duration time.Duration) {
+	passed := result.passed && result.status == http.StatusOK
+	level := slog.LevelInfo
+	outcome := "success"
+	switch {
+	case result.status >= http.StatusInternalServerError:
+		level = slog.LevelError
+		outcome = "error"
+	case result.status >= http.StatusBadRequest:
+		level = slog.LevelWarn
+		outcome = "rejected"
+	case !passed:
+		level = slog.LevelWarn
+		outcome = "failed"
+	}
+	slog.Log(ctx, level, "captcha request completed",
+		"route", route,
+		"http_status", result.status,
+		"duration", duration,
+		"picture_type", result.pictureType,
+		"model_group", modelGroupForPicture(result.pictureType),
+		"verify_status", result.verifyStatus,
+		"verify_result", result.verifyResult,
+		"passed", passed,
+		"outcome", outcome,
+	)
 }
 
 func normalizedPoints(points [][2]float64) []string {
