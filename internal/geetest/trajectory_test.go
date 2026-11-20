@@ -3,13 +3,15 @@ package geetest
 import (
 	"crypto/sha256"
 	"fmt"
+	"strings"
 	"testing"
 )
 
 func TestEmbeddedMousePathFixture(t *testing.T) {
-	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(embeddedMousePath)))
-	if hash != "637871c8af28b6235d33bdbc988651da5ebcdd2df407d3b3fa657e990ac6154e" {
-		t.Fatalf("mousepath hash = %s", hash)
+	canonical := strings.ReplaceAll(embeddedMousePath, "\r\n", "\n")
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(canonical)))
+	if hash != "334b731526f45b8ae66056ca72f410bd5ffd80ce44ab621a54b8b8cb5601941f" {
+		t.Fatalf("canonical mousepath hash = %s", hash)
 	}
 	path, err := defaultMousePath()
 	if err != nil {
