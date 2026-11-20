@@ -1,3 +1,5 @@
+代码fork自[kafuneri/captcha-tools](https://github.com/kafuneri/captcha-tools/)进行修改，感谢大佬的付出
+
 # captcha-tools-go
 
 这是 captcha-tools-main 的 Go + ONNX Runtime 迁移版。保留三组原始模型、Geetest 获取/提交流程、现有 HTTP API，以及模型按需加载和闲置卸载。原 Python 目录和容器不由本项目修改或替换。
