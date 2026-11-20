@@ -109,6 +109,27 @@ docker run -d --name captcha-tools-go --restart unless-stopped   -p 19645:9645  
 
 MODEL_PRELOAD=false 时启动不加载模型。第一次请求只加载所需组；并发请求共享一次加载；租约未结束时不会卸载。再次请求自动重载。Multi 三个 Session 作为一个资源组加载和释放。
 
+## 请求结果日志
+
+所有 `/pass_*` 请求结束时都会写入一条 `captcha request completed` 日志，包含接口、HTTP 状态、耗时、图片类型、模型组、上游验证状态及过码结果。保持 `LOG_LEVEL=INFO` 可查看全部结果；提高日志级别会过滤成功的 INFO 记录。
+
+`outcome` 字段含义：
+
+| 值 | 含义 |
+| --- | --- |
+| success | 上游验证成功并返回 validate |
+| failed | 请求已处理，但上游验证未通过 |
+| rejected | 参数错误等 HTTP 4xx 请求 |
+| error | 服务内部或上游调用错误等 HTTP 5xx 请求 |
+
+示例：
+
+```text
+time=... level=INFO msg="captcha request completed" route=/pass_nine http_status=200 duration=4.125s picture_type=nine model_group=pdl verify_status=success verify_result=success passed=true outcome=success
+```
+
+日志只记录 URL 路径，不记录查询字符串、完整 gt、challenge、validate、Cookie 或图片内容。识别未通过时的详细上游响应仍由原有 HTTP 响应返回。
+
 ## API 兼容
 
 所有原有路由均为 GET：
