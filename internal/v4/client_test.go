@@ -152,6 +152,59 @@ func TestSubmitRecoversRotatedKey(t *testing.T) {
 	}
 }
 
+// TestOpenAndSubmitMode2 drives the whole client path with pt=2: load, build
+// the answer, encrypt with SM4/SM2 and submit. It needs no real captcha_id.
+func TestOpenAndSubmitMode2(t *testing.T) {
+	var verifyQuery url.Values
+	client, _ := newTestClient(t,
+		func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, aiChallenge("2")) },
+		func(w http.ResponseWriter, r *http.Request) {
+			verifyQuery = r.URL.Query()
+			fmt.Fprint(w, `geetest_2({"status":"success","data":{"result":"success","seccode":{"captcha_id":"site-1","lot_number":"0123456789abcdef0123456789abcdef","pass_token":"token","gen_time":"1","captcha_output":"output"}}})`)
+		})
+
+	session, err := client.Open(context.Background(), Challenge{CaptchaID: "site-1", ClientType: "web", Lang: "zh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.PT() != 2 {
+		t.Fatalf("pt=%d, want 2", session.PT())
+	}
+	_, passed, err := session.Submit(context.Background(), Answer{Kind: "silent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !passed {
+		t.Fatal("expected a passing proof")
+	}
+	if verifyQuery.Get("pt") != "2" {
+		t.Fatalf("verify pt=%q, want 2", verifyQuery.Get("pt"))
+	}
+	if verifyQuery.Get("td") != "" {
+		t.Fatal("silent answers must not send a track")
+	}
+	wire := verifyQuery.Get("w")
+	if !isHex(wire) {
+		t.Fatalf("pt=2 wire is not hex: %q", wire)
+	}
+	// hex(SM4-CBC) followed by x||y||C2||C3 (112 bytes) without the 0x04 prefix.
+	if (len(wire)-224)%32 != 0 || len(wire) < 256 {
+		t.Fatalf("unexpected pt=2 wire length %d", len(wire))
+	}
+}
+
+func isHex(value string) bool {
+	if value == "" || len(value)%2 != 0 {
+		return false
+	}
+	for _, char := range value {
+		if !strings.ContainsRune("0123456789abcdef", char) {
+			return false
+		}
+	}
+	return true
+}
+
 func TestPatrolSupportsLiveBuild(t *testing.T) {
 	client, err := NewClient(Config{})
 	if err != nil {
