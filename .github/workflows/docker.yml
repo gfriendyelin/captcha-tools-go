@@ -69,7 +69,11 @@ jobs:
 
       - name: Start the container
         run: |
-          docker run --detach             --name captcha-tools-go-smoke             --publish 19645:9645             --env MODEL_PRELOAD=false             --env MODEL_IDLE_TIMEOUT=0             captcha-tools-go:smoke
+          docker run --detach             --name captcha-tools-go-smoke             --publish 19645:9645             --env MODEL_PRELOAD=false             --env MODEL_IDLE_TIMEOUT=0             --env MODEL_DIR=/app/model             captcha-tools-go:smoke
+          sleep 3
+          docker ps -a
+          docker inspect --format 'status={{.State.Status}} exit={{.State.ExitCode}} error={{.State.Error}}' captcha-tools-go-smoke || true
+          docker logs captcha-tools-go-smoke || true
 
       - name: Check health and real model lifecycle
         shell: bash
