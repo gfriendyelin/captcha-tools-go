@@ -140,6 +140,7 @@ time=... level=INFO msg="captcha request completed" route=/pass_nine http_status
 | /pass_nine | 另支持 use_v3_model=true、point=<float> |
 | /pass_icon | gt、challenge、save_result |
 | /pass_hutao | 保持 code/data/validate 结构与原 HTTP 状态 |
+| /pass_v4 | 必填 captcha_id（兼容 gt）；可选 risk_type、lang、client_type、voice=false、save_result=false |
 | /list_model | 当前已加载模型字符串数组 |
 | /list_all_model | 所有模型组及关键字字符串数组 |
 | /load_model?name=pdl | 支持原别名；之后仍受闲置超时控制 |
@@ -147,6 +148,8 @@ time=... level=INFO msg="captcha request completed" route=/pass_nine http_status
 | /set_log_level?level=DEBUG | 动态设置日志级别 |
 
 另提供 /healthz 供容器健康检查。普通验证接口直接返回上游 verify JSON；业务异常保持 {"error":"An internal server error occurred.","detail":"..."} 和 HTTP 500。缺少必填参数返回 422，非法日志级别返回 400。
+
+/pass_v4 在服务端完成 V4 全链路：/load 取题 → 按 captcha_type 求解（slide / nine / icon / word / phrase / match / winlinze / voice / ai）→ 生成 PoW 与轨迹 → /verify，并原样返回上游 verify JSON。V4 的 /load 需要随机 challenge，由服务端每次生成；查询参数 challenge 可传但会被忽略。pt=2 使用固定 SM2 公钥封装 SM4 密钥（C1C2C3，去掉 0x04 点前缀，依赖 gmsm）；请求日志中的 payload_protocol 字段可直接确认本次使用的 pt。
 
 支持原关键字：pdl/paddle/nine/原神/genshin、dfine/click/memo/note/便笺、multi/dino/click2/星穹铁道/崩铁/绝区零/zzz/hkrpg 及原 Session 名。Multi 的单个 Session 名会有意映射为整组安全卸载。
 

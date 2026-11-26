@@ -18,6 +18,7 @@ import (
 type Server struct {
 	predictor     Predictor
 	flows         FlowFactory
+	v4Flows       V4FlowFactory
 	models        ModelController
 	store         *storage.Store
 	level         *slog.LevelVar
@@ -30,13 +31,14 @@ func New(options Options, level *slog.LevelVar) *Server {
 	if options.VerifyDelay == 0 {
 		options.VerifyDelay = 4 * time.Second
 	}
-	s := &Server{predictor: options.Predictor, flows: options.Flows, models: options.Models,
+	s := &Server{predictor: options.Predictor, flows: options.Flows, v4Flows: options.V4Flows, models: options.Models,
 		store: options.Store, level: level, verifyDelay: options.VerifyDelay, disableDelays: options.DisableDelays}
 	s.mux = http.NewServeMux()
 	s.mux.HandleFunc("GET /pass_uni", s.passHandler(false))
 	s.mux.HandleFunc("GET /pass_nine", s.passHandler(false))
 	s.mux.HandleFunc("GET /pass_icon", s.passHandler(false))
 	s.mux.HandleFunc("GET /pass_hutao", s.passHandler(true))
+	s.mux.HandleFunc("GET /pass_v4", s.passV4Handler())
 	s.mux.HandleFunc("GET /list_model", s.listModel)
 	s.mux.HandleFunc("GET /list_all_model", s.listAllModel)
 	s.mux.HandleFunc("GET /load_model", s.loadModel)
@@ -49,12 +51,13 @@ func New(options Options, level *slog.LevelVar) *Server {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
 
 type response struct {
-	status       int
-	body         json.RawMessage
-	pictureType  string
-	verifyStatus string
-	verifyResult string
-	passed       bool
+	status          int
+	body            json.RawMessage
+	pictureType     string
+	verifyStatus    string
+	verifyResult    string
+	payloadProtocol int
+	passed          bool
 }
 
 type passResponseWriter struct {
@@ -136,6 +139,152 @@ func (s *Server) passHandler(hutao bool) http.HandlerFunc {
 			writeJSON(w, result.status, map[string]any{"code": 1, "data": map[string]any{"gt": gt, "challenge": challenge, "validate": original}})
 		}
 	}
+}
+
+func (s *Server) passV4Handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		writer := &passResponseWriter{ResponseWriter: w}
+		w = writer
+		logResult := response{}
+		defer func() {
+			logResult.status = writer.status
+			if logResult.status == 0 {
+				logResult.status = http.StatusInternalServerError
+			}
+			logPassResult(r.Context(), r.URL.Path, logResult, time.Since(started))
+		}()
+		challenge, ok := requiredV4Challenge(w, r)
+		if !ok {
+			return
+		}
+		saveResult, valid := optionalBool(w, r, "save_result", false)
+		if !valid {
+			return
+		}
+		result := s.handlePassV4(r.Context(), challenge, saveResult)
+		logResult = result
+		writeRaw(w, result.status, result.body)
+	}
+}
+
+func requiredV4Challenge(w http.ResponseWriter, r *http.Request) (V4Challenge, bool) {
+	var challenge V4Challenge
+	query := r.URL.Query()
+	challenge.CaptchaID = query.Get("captcha_id")
+	if challenge.CaptchaID == "" {
+		challenge.CaptchaID = query.Get("gt")
+	}
+	if challenge.CaptchaID == "" {
+		validationError(w, "captcha_id", "Field required")
+		return challenge, false
+	}
+	challenge.ClientType = query.Get("client_type")
+	challenge.RiskType = query.Get("risk_type")
+	challenge.Lang = query.Get("lang")
+	voice, valid := optionalBool(w, r, "voice", false)
+	if !valid {
+		return challenge, false
+	}
+	challenge.Voice = voice
+	return challenge, true
+}
+
+func (s *Server) handlePassV4(ctx context.Context, challenge V4Challenge, saveResult bool) (result response) {
+	started := time.Now()
+	pictureType := ""
+	verifyStatus := ""
+	verifyResult := ""
+	payloadProtocol := 0
+	passed := false
+	defer func() {
+		result.pictureType = pictureType
+		result.verifyStatus = verifyStatus
+		result.verifyResult = verifyResult
+		result.payloadProtocol = payloadProtocol
+		result.passed = passed
+	}()
+
+	if s.v4Flows == nil || s.store == nil {
+		return errorResponse(fmt.Errorf("service is not fully configured"))
+	}
+	workspace, err := s.store.Begin()
+	if err != nil {
+		return errorResponse(err)
+	}
+	defer func() {
+		if cleanupErr := workspace.Cleanup(); cleanupErr != nil {
+			result = errorResponse(fmt.Errorf("clean request workspace: %w", cleanupErr))
+		}
+	}()
+	flow, err := s.v4Flows(challenge)
+	if err != nil {
+		return errorResponse(err)
+	}
+	defer flow.Close()
+	puzzle, err := flow.Load(ctx)
+	if err != nil {
+		return errorResponse(err)
+	}
+	pictureType = puzzle.Kind
+	payloadProtocol = puzzle.PayloadProtocol
+	var assets []string
+	if saveResult {
+		for i, asset := range puzzle.Assets {
+			name, nameErr := storage.FilenameFromResource(asset.Name)
+			if nameErr != nil {
+				return errorResponse(nameErr)
+			}
+			if i == 0 {
+				err = workspace.WriteOriginal(name, asset.Data)
+			} else {
+				err = workspace.WriteArtifact(name, asset.Data)
+			}
+			if err != nil {
+				return errorResponse(err)
+			}
+			assets = append(assets, name)
+		}
+	}
+	if !s.disableDelays {
+		remaining := s.verifyDelay - time.Since(started)
+		if remaining > 0 {
+			timer := time.NewTimer(remaining)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return errorResponse(ctx.Err())
+			case <-timer.C:
+			}
+		}
+	}
+	raw, proofPassed, err := flow.Submit(ctx)
+	if err != nil {
+		return errorResponse(err)
+	}
+	if !json.Valid(raw) {
+		return errorResponse(fmt.Errorf("invalid verify JSON response"))
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return errorResponse(err)
+	}
+	if decoded == nil {
+		return errorResponse(fmt.Errorf("verify response must be a JSON object"))
+	}
+	verifyStatus, _ = decoded["status"].(string)
+	if data, ok := decoded["data"].(map[string]any); ok {
+		verifyResult, _ = data["result"].(string)
+	}
+	passed = proofPassed
+	if saveResult && len(assets) > 0 {
+		if err := workspace.CommitFiles(passed, assets[1:]); err != nil {
+			return errorResponse(err)
+		}
+	}
+	return response{status: 200, body: append(json.RawMessage(nil), raw...)}
 }
 
 func (s *Server) handlePass(ctx context.Context, gt, challenge string, saveResult, useV3 bool, point *float64) (result response) {
@@ -274,6 +423,18 @@ func modelGroupForPicture(pictureType string) string {
 		return "multi"
 	case "icon1":
 		return "dfine"
+	case "slide":
+		return "slide"
+	case "grid":
+		return "grid"
+	case "click":
+		return "click"
+	case "match", "gomoku":
+		return "board"
+	case "voice":
+		return "voice"
+	case "silent":
+		return "silent"
 	default:
 		return "unknown"
 	}
@@ -294,7 +455,7 @@ func logPassResult(ctx context.Context, route string, result response, duration 
 		level = slog.LevelWarn
 		outcome = "failed"
 	}
-	slog.Log(ctx, level, "captcha request completed",
+	attrs := []any{
 		"route", route,
 		"http_status", result.status,
 		"duration", duration,
@@ -304,7 +465,11 @@ func logPassResult(ctx context.Context, route string, result response, duration 
 		"verify_result", result.verifyResult,
 		"passed", passed,
 		"outcome", outcome,
-	)
+	}
+	if result.payloadProtocol > 0 {
+		attrs = append(attrs, "payload_protocol", result.payloadProtocol)
+	}
+	slog.Log(ctx, level, "captcha request completed", attrs...)
 }
 
 func normalizedPoints(points [][2]float64) []string {

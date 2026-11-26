@@ -133,6 +133,43 @@ func (r *Request) Commit(pictureType string, passed bool) error {
 	return nil
 }
 
+// CommitFiles copies the recorded original plus the named request files into
+// the pass/fail directory. It backs flows without a fixed artifact list.
+func (r *Request) CommitFiles(passed bool, artifacts []string) error {
+	if r.originalName == "" {
+		return fmt.Errorf("original image was not recorded")
+	}
+	class := "img_fail"
+	if passed {
+		class = "img_pass"
+	}
+	base := strings.SplitN(r.originalName, ".", 2)[0]
+	artifactDir := filepath.Join(r.store.saveRoot, class, base+"-"+r.ID)
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		return err
+	}
+	if err := r.copyOriginalUnique(); err != nil {
+		return err
+	}
+	for _, artifact := range artifacts {
+		safe, err := SafeFilename(artifact)
+		if err != nil {
+			return err
+		}
+		source := filepath.Join(r.Dir, safe)
+		if _, err := os.Stat(source); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		if err := copyExclusive(filepath.Join(artifactDir, safe), source); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *Request) copyOriginalUnique() error {
 	ext := filepath.Ext(r.originalName)
 	base := strings.TrimSuffix(r.originalName, ext)

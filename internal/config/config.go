@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -15,119 +16,172 @@ type Config struct {
 	ModelDir           string
 	WorkDir            string
 	SaveDir            string
+	SaveResult         bool
 	LogDir             string
 	LogLevel           string
 	UsePDL             bool
 	UseDFINE           bool
 	UseMulti           bool
+	UseGrid            bool
 	Preload            []string
 	ModelIdleTimeout   time.Duration
-	DINORandomOffset   bool
 	HTTPTimeout        time.Duration
 	ShutdownTimeout    time.Duration
 	MaxImageBytes      int64
+	DINORandomOffset   bool
+	DisableDelays      bool
 	ONNXRuntimeLibrary string
 }
 
-func Load() (Config, error) { return FromEnv(os.LookupEnv) }
-
-func FromEnv(lookup func(string) (string, bool)) (Config, error) {
-	cfg := Config{
-		Port: DefaultPort, ModelDir: "model", WorkDir: "img_2_val", SaveDir: "img_saved",
-		LogDir: "logs", LogLevel: "INFO", UsePDL: true, UseDFINE: true, UseMulti: true,
-		ModelIdleTimeout: 10 * time.Minute, DINORandomOffset: true,
-		HTTPTimeout: 30 * time.Second, ShutdownTimeout: 30 * time.Second,
-		MaxImageBytes: 32 << 20,
+// Default returns the service defaults. PDL/D-FINE are enabled; Multi and Grid
+// are also enabled but stay cold (not preloaded) until the corresponding route
+// or MODEL_PRELOAD requests them.
+func Default() Config {
+	library := ""
+	if runtime.GOOS == "windows" {
+		library = ".onnxruntime/onnxruntime.dll"
+	} else {
+		library = ".onnxruntime/libonnxruntime.so"
 	}
-	get := func(keys ...string) (string, bool) {
-		for _, key := range keys {
-			if value, ok := lookup(key); ok && strings.TrimSpace(value) != "" {
-				return strings.TrimSpace(value), true
+	return Config{
+		Port:               DefaultPort,
+		ModelDir:           "model",
+		WorkDir:            "workspace",
+		SaveDir:            "saves",
+		SaveResult:         false,
+		LogDir:             "logs",
+		LogLevel:           "INFO",
+		UsePDL:             true,
+		UseDFINE:           true,
+		UseMulti:           true,
+		UseGrid:            true,
+		Preload:            []string{},
+		ModelIdleTimeout:   10 * time.Minute,
+		HTTPTimeout:        10 * time.Second,
+		ShutdownTimeout:    10 * time.Second,
+		MaxImageBytes:      10 << 20,
+		DINORandomOffset:   true,
+		DisableDelays:      false,
+		ONNXRuntimeLibrary: library,
+	}
+}
+
+// FromEnv applies environment variables to cfg using the provided lookup. The
+// lookup is a function for testability; Load() wires os.LookupEnv.
+func FromEnv(lookup func(string) (string, bool)) (Config, error) {
+	cfg := Default()
+	get := func(names ...string) (string, bool) {
+		for _, name := range names {
+			if value, ok := lookup(name); ok {
+				return value, true
 			}
 		}
 		return "", false
 	}
-	var err error
-	if value, ok := get("PORT"); ok {
-		cfg.Port, err = strconv.Atoi(value)
-		if err != nil || cfg.Port < 1 || cfg.Port > 65535 {
-			return cfg, fmt.Errorf("PORT must be a valid TCP port: %q", value)
+	if value, ok := get("PORT", "CAPTCHA_TOOLS_PORT"); ok {
+		port, err := strconv.Atoi(value)
+		if err != nil || port <= 0 || port > 65535 {
+			return cfg, fmt.Errorf("PORT must be 1..65535: %q", value)
 		}
+		cfg.Port = port
+	}
+	if value, ok := get("MODEL_DIR"); ok {
+		cfg.ModelDir = value
+	}
+	if value, ok := get("WORK_DIR"); ok {
+		cfg.WorkDir = value
+	}
+	if value, ok := get("SAVE_DIR"); ok {
+		cfg.SaveDir = value
+	}
+	if value, ok := get("SAVE_RESULT"); ok {
+		parsed, err := parseBool(value)
+		if err != nil {
+			return cfg, err
+		}
+		cfg.SaveResult = parsed
+	}
+	if value, ok := get("LOG_DIR"); ok {
+		cfg.LogDir = value
+	}
+	if value, ok := get("LOG_LEVEL"); ok {
+		cfg.LogLevel = normalizeLogLevel(value)
 	}
 	for _, item := range []struct {
-		keys   []string
+		names  []string
 		target *bool
 	}{
 		{[]string{"use_pdl", "USE_PDL"}, &cfg.UsePDL},
 		{[]string{"use_dfine", "USE_DFINE"}, &cfg.UseDFINE},
 		{[]string{"use_multi", "USE_MULTI"}, &cfg.UseMulti},
-		{[]string{"DINO_RANDOM_OFFSET"}, &cfg.DINORandomOffset},
+		{[]string{"use_grid", "USE_GRID"}, &cfg.UseGrid},
+		{[]string{"disable_delays", "DISABLE_DELAYS"}, &cfg.DisableDelays},
+		{[]string{"dino_random_offset", "DINO_RANDOM_OFFSET"}, &cfg.DINORandomOffset},
 	} {
-		if value, ok := get(item.keys...); ok {
-			enabled, parseErr := parseBool(value)
-			if parseErr != nil {
-				return cfg, fmt.Errorf("%s: %w", item.keys[0], parseErr)
+		if value, ok := get(item.names...); ok {
+			parsed, err := parseBool(value)
+			if err != nil {
+				return cfg, err
 			}
-			*item.target = enabled
+			*item.target = parsed
 		}
-	}
-	for _, item := range []struct {
-		keys   []string
-		target *string
-	}{
-		{[]string{"MODEL_DIR"}, &cfg.ModelDir}, {[]string{"WORK_DIR"}, &cfg.WorkDir},
-		{[]string{"SAVE_DIR"}, &cfg.SaveDir}, {[]string{"LOG_DIR"}, &cfg.LogDir},
-		{[]string{"ONNXRUNTIME_SHARED_LIBRARY_PATH"}, &cfg.ONNXRuntimeLibrary},
-	} {
-		if value, ok := get(item.keys...); ok {
-			*item.target = value
-		}
-	}
-	if value, ok := get("LOG_LEVEL"); ok {
-		cfg.LogLevel = NormalizeLogLevel(value)
 	}
 	if value, ok := get("MODEL_IDLE_TIMEOUT"); ok {
-		cfg.ModelIdleTimeout, err = time.ParseDuration(value)
-		if err != nil || cfg.ModelIdleTimeout < 0 {
-			return cfg, fmt.Errorf("MODEL_IDLE_TIMEOUT must be a non-negative Go duration: %q", value)
+		duration, err := parseDuration(value)
+		if err != nil {
+			return cfg, err
 		}
+		cfg.ModelIdleTimeout = duration
 	}
-	for _, item := range []struct {
-		key    string
-		target *time.Duration
-	}{
-		{"HTTP_TIMEOUT", &cfg.HTTPTimeout}, {"SHUTDOWN_TIMEOUT", &cfg.ShutdownTimeout},
-	} {
-		if value, ok := get(item.key); ok {
-			duration, parseErr := time.ParseDuration(value)
-			if parseErr != nil || duration <= 0 {
-				return cfg, fmt.Errorf("%s must be a positive Go duration: %q", item.key, value)
-			}
-			*item.target = duration
+	if value, ok := get("HTTP_TIMEOUT"); ok {
+		duration, err := parseDuration(value)
+		if err != nil {
+			return cfg, err
 		}
+		cfg.HTTPTimeout = duration
+	}
+	if value, ok := get("SHUTDOWN_TIMEOUT"); ok {
+		duration, err := parseDuration(value)
+		if err != nil {
+			return cfg, err
+		}
+		cfg.ShutdownTimeout = duration
 	}
 	if value, ok := get("MAX_IMAGE_BYTES"); ok {
-		cfg.MaxImageBytes, err = strconv.ParseInt(value, 10, 64)
-		if err != nil || cfg.MaxImageBytes <= 0 {
+		bytes, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || bytes <= 0 {
 			return cfg, fmt.Errorf("MAX_IMAGE_BYTES must be positive: %q", value)
 		}
+		cfg.MaxImageBytes = bytes
 	}
 	if value, ok := get("MODEL_PRELOAD"); ok {
 		switch strings.ToLower(value) {
 		case "", "0", "false", "no", "off":
+			cfg.Preload = []string{}
 		case "1", "true", "yes", "on":
-			cfg.Preload = []string{"pdl", "dfine", "multi"}
+			// PDL/D-FINE stay hot; Multi/Grid stay cold unless listed.
+			cfg.Preload = []string{"pdl", "dfine"}
 		default:
+			var names []string
 			for _, name := range strings.Split(value, ",") {
 				name = strings.ToLower(strings.TrimSpace(name))
-				if name != "pdl" && name != "dfine" && name != "multi" {
+				if name != "pdl" && name != "dfine" && name != "multi" && name != "grid" {
 					return cfg, fmt.Errorf("MODEL_PRELOAD contains unsupported group %q", name)
 				}
-				cfg.Preload = append(cfg.Preload, name)
+				names = append(names, name)
 			}
+			cfg.Preload = names
 		}
 	}
+	if value, ok := get("ONNXRUNTIME_SHARED_LIBRARY_PATH"); ok {
+		cfg.ONNXRuntimeLibrary = value
+	}
 	return cfg, nil
+}
+
+// Load builds the default configuration and applies the process environment.
+func Load() (Config, error) {
+	return FromEnv(os.LookupEnv)
 }
 
 func parseBool(value string) (bool, error) {
@@ -137,14 +191,29 @@ func parseBool(value string) (bool, error) {
 	case "0", "false", "no", "off":
 		return false, nil
 	default:
-		return false, fmt.Errorf("expected 0/1 or a Go boolean, got %q", value)
+		return false, fmt.Errorf("invalid boolean %q", value)
 	}
 }
 
-func NormalizeLogLevel(value string) string {
-	value = strings.ToUpper(strings.TrimSpace(value))
-	if value == "WARNING" {
+// parseDuration accepts Go duration strings ("1500ms", "10m", "1h30m") and
+// rejects bare numbers and non-positive values.
+func parseDuration(value string) (time.Duration, error) {
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration %q", value)
+	}
+	if duration <= 0 {
+		return 0, fmt.Errorf("duration must be positive: %q", value)
+	}
+	return duration, nil
+}
+
+// normalizeLogLevel canonicalizes a LOG_LEVEL value: it trims, uppercases and
+// maps the WARNING synonym to WARN so callers see one canonical spelling.
+func normalizeLogLevel(value string) string {
+	level := strings.ToUpper(strings.TrimSpace(value))
+	if level == "WARNING" {
 		return "WARN"
 	}
-	return value
+	return level
 }

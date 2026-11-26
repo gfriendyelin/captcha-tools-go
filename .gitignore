@@ -8,4 +8,5 @@ img_saved/
 .onnxruntime/
 .gocache/
 **/.gocache/
+.typecheck/
 __pycache__/

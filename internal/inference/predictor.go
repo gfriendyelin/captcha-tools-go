@@ -9,6 +9,11 @@ import (
 	ort "github.com/yalue/onnxruntime_go"
 )
 
+// Nine solves a V3 nine-grid. When useV3 is true it runs the Lotus decision
+// chain (HGNet baseline classification -> multi-view agreement -> semantic
+// grouped recovery) and falls back to the original PDL cosine coordinates when
+// the chain cannot produce a confident answer or the grid models are disabled.
+// When useV3 is false it keeps the legacy PDL path unchanged.
 func (r *Registry) Nine(ctx context.Context, data []byte, useV3 bool, point *float64) (server.NineResult, error) {
 	var empty server.NineResult
 	lease, err := r.acquire(ctx, "pdl")
@@ -42,28 +47,58 @@ func (r *Registry) Nine(ctx context.Context, data []byte, useV3 bool, point *flo
 		}
 		roundTripped[i] = decoded
 	}
-	var input vision.Tensor
 	if useV3 {
-		input, err = vision.PreprocessPDL(roundTripped)
-	} else {
-		nineData, encodeErr := vision.EncodeJPEG(crops.Nine)
-		if encodeErr != nil {
-			return empty, encodeErr
+		if cells, chainErr := r.gridChainV3(ctx, roundTripped[:9], roundTripped[9]); chainErr == nil {
+			for _, cell := range cells {
+				result.Cells = append(result.Cells, [2]int{cell.Row, cell.Col})
+			}
+			return result, nil
 		}
-		nine, decodeErr := vision.RGBFromBytes(nineData)
-		if decodeErr != nil {
-			return empty, decodeErr
+		// The grid chain needs PDL + grid models; fall through to the original
+		// PDL cosine path when they are disabled or the chain is not confident.
+		input, err := vision.PreprocessPDL(roundTripped)
+		if err != nil {
+			return empty, err
 		}
-		cells, cropErr := vision.CropGrid(nine)
-		if cropErr != nil {
-			return empty, cropErr
+		tensor, err := ort.NewTensor(shape4(input.Shape), input.Data)
+		if err != nil {
+			return empty, err
 		}
-		images := []*vision.RGB{roundTripped[9]}
+		outputs, err := resource.Session.Run(ctx, []ort.Value{tensor})
+		if err != nil {
+			return empty, err
+		}
+		if len(outputs) != 1 || len(outputs[0].Shape) != 2 {
+			return empty, fmt.Errorf("unexpected PDL output shape")
+		}
+		batch, classes := int(outputs[0].Shape[0]), int(outputs[0].Shape[1])
+		cells, postErr := vision.PDLCoordinates(outputs[0].Float32, batch, classes)
+		if postErr != nil {
+			return empty, postErr
+		}
 		for _, cell := range cells {
-			images = append(images, cell)
+			result.Cells = append(result.Cells, [2]int{cell.Row, cell.Col})
 		}
-		input, err = vision.PreprocessLegacy(images)
+		return result, nil
 	}
+	// Legacy path (useV3=false): nine preview -> equal-thirds grid -> PDL.
+	nineData, encodeErr := vision.EncodeJPEG(crops.Nine)
+	if encodeErr != nil {
+		return empty, encodeErr
+	}
+	nine, decodeErr := vision.RGBFromBytes(nineData)
+	if decodeErr != nil {
+		return empty, decodeErr
+	}
+	cells, cropErr := vision.CropGrid(nine)
+	if cropErr != nil {
+		return empty, cropErr
+	}
+	images := []*vision.RGB{roundTripped[9]}
+	for _, cell := range cells {
+		images = append(images, cell)
+	}
+	input, err := vision.PreprocessLegacy(images)
 	if err != nil {
 		return empty, err
 	}
@@ -78,30 +113,43 @@ func (r *Registry) Nine(ctx context.Context, data []byte, useV3 bool, point *flo
 	if len(outputs) != 1 || len(outputs[0].Shape) != 2 {
 		return empty, fmt.Errorf("unexpected PDL output shape")
 	}
-	batch, classes := int(outputs[0].Shape[0]), int(outputs[0].Shape[1])
-	if useV3 {
-		cells, postErr := vision.PDLCoordinates(outputs[0].Float32, batch, classes)
-		if postErr != nil {
-			return empty, postErr
-		}
-		for _, cell := range cells {
-			result.Cells = append(result.Cells, [2]int{cell.Row, cell.Col})
-		}
-	} else {
-		var threshold *float32
-		if point != nil {
-			converted := float32(*point)
-			threshold = &converted
-		}
-		cells, postErr := vision.LegacyCoordinates(outputs[0].Float32, classes, threshold)
-		if postErr != nil {
-			return empty, postErr
-		}
-		for _, cell := range cells {
-			result.Cells = append(result.Cells, [2]int{cell.Row, cell.Col})
-		}
+	classes := int(outputs[0].Shape[1])
+	var threshold *float32
+	if point != nil {
+		converted := float32(*point)
+		threshold = &converted
+	}
+	legacyCells, postErr := vision.LegacyCoordinates(outputs[0].Float32, classes, threshold)
+	if postErr != nil {
+		return empty, postErr
+	}
+	for _, cell := range legacyCells {
+		result.Cells = append(result.Cells, [2]int{cell.Row, cell.Col})
 	}
 	return result, nil
+}
+
+// gridChainV3 runs the Lotus nine chain (baseline classification -> multi-view
+// agreement -> semantic grouped recovery) over the nine V3 cells and the
+// target. It returns (cells, nil) on a confident answer, or (nil, err) when
+// the whole chain fails and the caller should fall back to the legacy PDL
+// cosine path.
+func (r *Registry) gridChainV3(ctx context.Context, cells []*vision.RGB, prompt *vision.RGB) ([]vision.GridPoint, error) {
+	recovered, err := r.GridSemanticRecovery(ctx, cells, prompt, 0, 1.5)
+	if err != nil {
+		return nil, err
+	}
+	return gridIndicesToCells(recovered), nil
+}
+
+// gridIndicesToCells converts zero-based grid indices to 1-based {Row, Col}
+// cells in the Lotus convention.
+func gridIndicesToCells(indices []int) []vision.GridPoint {
+	cells := make([]vision.GridPoint, 0, len(indices))
+	for _, index := range indices {
+		cells = append(cells, vision.GridPoint{Row: index/3 + 1, Col: index%3 + 1})
+	}
+	return cells
 }
 
 func (r *Registry) DFINE(ctx context.Context, data []byte, draw bool) (server.IconResult, error) {

@@ -45,6 +45,33 @@ type Flow interface {
 
 type FlowFactory func(gt, challenge string) (Flow, error)
 
+// V4Puzzle is the loaded puzzle kind and its saveable inputs.
+type V4Puzzle struct {
+	Kind   string
+	Assets []Artifact
+	// PayloadProtocol is the pt reported by /load; 0 when unknown.
+	PayloadProtocol int
+}
+
+// V4Challenge identifies a GeeTest V4 site.
+type V4Challenge struct {
+	CaptchaID  string
+	ClientType string
+	RiskType   string
+	Lang       string
+	Voice      bool
+}
+
+// V4Flow loads one V4 challenge and submits the solved answer. Submit returns
+// the upstream verify JSON and whether the proof passed.
+type V4Flow interface {
+	Load(context.Context) (V4Puzzle, error)
+	Submit(context.Context) (json.RawMessage, bool, error)
+	Close() error
+}
+
+type V4FlowFactory func(V4Challenge) (V4Flow, error)
+
 type ModelController interface {
 	ListModels() []string
 	ListAllModels() []string
@@ -55,6 +82,7 @@ type ModelController interface {
 type Options struct {
 	Predictor     Predictor
 	Flows         FlowFactory
+	V4Flows       V4FlowFactory
 	Models        ModelController
 	Store         *storage.Store
 	VerifyDelay   time.Duration
