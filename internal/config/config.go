@@ -127,9 +127,11 @@ func FromEnv(lookup func(string) (string, bool)) (Config, error) {
 		}
 	}
 	if value, ok := get("MODEL_IDLE_TIMEOUT"); ok {
-		duration, err := parseDuration(value)
-		if err != nil {
-			return cfg, err
+		// Zero is valid and disables automatic unloading; only negatives are
+		// rejected. HTTP_TIMEOUT/SHUTDOWN_TIMEOUT still require a positive value.
+		duration, err := time.ParseDuration(strings.TrimSpace(value))
+		if err != nil || duration < 0 {
+			return cfg, fmt.Errorf("MODEL_IDLE_TIMEOUT must be a non-negative duration: %q", value)
 		}
 		cfg.ModelIdleTimeout = duration
 	}

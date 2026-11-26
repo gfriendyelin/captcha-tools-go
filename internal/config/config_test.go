@@ -38,6 +38,19 @@ func TestCompatibilityEnvironment(t *testing.T) {
 	}
 }
 
+// 0 must stay accepted: the README and model.Group treat it as "never unload".
+func TestZeroIdleTimeoutDisablesAutoUnload(t *testing.T) {
+	for _, value := range []string{"0", "0s"} {
+		cfg, err := FromEnv(env(map[string]string{"MODEL_IDLE_TIMEOUT": value}))
+		if err != nil {
+			t.Fatalf("MODEL_IDLE_TIMEOUT=%q: %v", value, err)
+		}
+		if cfg.ModelIdleTimeout != 0 {
+			t.Fatalf("MODEL_IDLE_TIMEOUT=%q: got %v, want 0", value, cfg.ModelIdleTimeout)
+		}
+	}
+}
+
 func TestInvalidEnvironment(t *testing.T) {
 	for _, values := range []map[string]string{
 		{"MODEL_IDLE_TIMEOUT": "10"}, {"MODEL_IDLE_TIMEOUT": "-1s"}, {"use_pdl": "maybe"},
