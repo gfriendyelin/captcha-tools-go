@@ -13,7 +13,7 @@ import (
 	"github.com/kafuneri/captcha-tools-go/internal/config"
 )
 
-func integrationRegistry(t *testing.T, idle time.Duration) *Registry {
+func integrationRegistry(t *testing.T) *Registry {
 	t.Helper()
 	if os.Getenv("CAPTCHA_INTEGRATION") == "" {
 		t.Skip("set CAPTCHA_INTEGRATION=1 to run real ONNX lifecycle tests")
@@ -23,9 +23,9 @@ func integrationRegistry(t *testing.T, idle time.Duration) *Registry {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	registry := NewRegistry(config.Config{ModelDir: filepath.Join(root, "model"),
+	registry := NewRegistry(config.Config{Mode: config.ModeV3, ModelDir: filepath.Join(root, "model"),
 		ONNXRuntimeLibrary: filepath.Join(root, ".onnxruntime", "onnxruntime.dll"),
-		UsePDL:             true, UseDFINE: true, UseMulti: true, ModelIdleTimeout: idle, DINORandomOffset: false}, logger)
+		UsePDL:             true, UseDFINE: true, UseMulti: true, UseGrid: true, DINORandomOffset: false}, logger)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -35,8 +35,8 @@ func integrationRegistry(t *testing.T, idle time.Duration) *Registry {
 	return registry
 }
 
-func TestRealONNXLazyIdleReloadAndInflightProtection(t *testing.T) {
-	registry := integrationRegistry(t, 150*time.Millisecond)
+func TestRealONNXLazyReloadAndInflightProtection(t *testing.T) {
+	registry := integrationRegistry(t)
 	if registry.pdl.Loaded() || registry.dfine.Loaded() || registry.multi.Loaded() {
 		t.Fatal("models loaded at construction")
 	}
@@ -54,12 +54,13 @@ func TestRealONNXLazyIdleReloadAndInflightProtection(t *testing.T) {
 		t.Fatalf("unload with in-flight lease = %v", err)
 	}
 	lease.Release()
-	deadline := time.Now().Add(3 * time.Second)
-	for registry.pdl.Loaded() && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
+	unloadCtx, unloadCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer unloadCancel()
+	if _, err := registry.UnloadModel(unloadCtx, "pdl"); err != nil {
+		t.Fatal(err)
 	}
 	if registry.pdl.Loaded() {
-		t.Fatal("PDL did not unload after idle timeout")
+		t.Fatal("PDL did not unload")
 	}
 	data, err := os.ReadFile("../../testdata/sample-nine.jpg")
 	if err != nil {

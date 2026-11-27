@@ -37,35 +37,51 @@ type Registry struct {
 }
 
 func NewRegistry(cfg config.Config, logger *slog.Logger) *Registry {
+	mode := cfg.Mode
+	if mode == "" {
+		mode = config.ModeAll
+	}
+	enabled := map[string]bool{
+		"pdl": cfg.UsePDL, "dfine": cfg.UseDFINE, "multi": cfg.UseMulti, "grid": cfg.UseGrid,
+		"direction": true, "symbols": true, "word": true, "phrase": true,
+	}
+	switch mode {
+	case config.ModeV3:
+		enabled["direction"], enabled["symbols"], enabled["word"], enabled["phrase"] = false, false, false, false
+	case config.ModeV4:
+		enabled["pdl"], enabled["dfine"], enabled["multi"] = false, false, false
+	}
 	r := &Registry{
-		enabled:      map[string]bool{"pdl": cfg.UsePDL, "dfine": cfg.UseDFINE, "multi": cfg.UseMulti, "grid": cfg.UseGrid, "direction": true, "symbols": true, "word": true, "phrase": true},
+		enabled:      enabled,
 		randomOffset: cfg.DINORandomOffset,
 		modelDir:     cfg.ModelDir,
 	}
+	// Model groups stay loaded while the worker lives. The worker process exits
+	// after WORKER_IDLE_TIMEOUT, which is the only supported way to reclaim RSS.
 	r.pdl = model.NewGroup("pdl", func(ctx context.Context) (model.Resource, error) {
 		return LoadPDL(ctx, cfg.ONNXRuntimeLibrary, cfg.ModelDir)
-	}, cfg.ModelIdleTimeout, logger)
+	}, 0, logger)
 	r.dfine = model.NewGroup("dfine", func(ctx context.Context) (model.Resource, error) {
 		return LoadDFINE(ctx, cfg.ONNXRuntimeLibrary, cfg.ModelDir)
-	}, cfg.ModelIdleTimeout, logger)
+	}, 0, logger)
 	r.multi = model.NewGroup("multi", func(ctx context.Context) (model.Resource, error) {
 		return LoadMulti(ctx, cfg.ONNXRuntimeLibrary, cfg.ModelDir)
-	}, cfg.ModelIdleTimeout, logger)
+	}, 0, logger)
 	r.grid = model.NewGroup("grid", func(ctx context.Context) (model.Resource, error) {
 		return LoadGrid(ctx, cfg.ONNXRuntimeLibrary, filepath.Join(cfg.ModelDir, "grid"))
-	}, cfg.ModelIdleTimeout, logger)
+	}, 0, logger)
 	r.direction = model.NewGroup("direction", func(ctx context.Context) (model.Resource, error) {
 		return LoadDirection(ctx, cfg.ONNXRuntimeLibrary, filepath.Join(cfg.ModelDir, "v4-direction"))
-	}, cfg.ModelIdleTimeout, logger)
+	}, 0, logger)
 	r.symbols = model.NewGroup("symbols", func(ctx context.Context) (model.Resource, error) {
 		return LoadSymbols(ctx, cfg.ONNXRuntimeLibrary, filepath.Join(cfg.ModelDir, "v4-symbols"))
-	}, cfg.ModelIdleTimeout, logger)
+	}, 0, logger)
 	r.word = model.NewGroup("word", func(ctx context.Context) (model.Resource, error) {
 		return LoadWord(ctx, cfg.ONNXRuntimeLibrary, filepath.Join(cfg.ModelDir, "v4-word"))
-	}, cfg.ModelIdleTimeout, logger)
+	}, 0, logger)
 	r.phrase = model.NewGroup("phrase", func(ctx context.Context) (model.Resource, error) {
 		return LoadPhrase(ctx, cfg.ONNXRuntimeLibrary, filepath.Join(cfg.ModelDir, "v4-phrase-core"), true)
-	}, cfg.ModelIdleTimeout, logger)
+	}, 0, logger)
 	return r
 }
 
@@ -135,17 +151,26 @@ func (r *Registry) ListModels() []string {
 }
 
 func (r *Registry) ListAllModels() []string {
-	return []string{
-		"以下是所有可用模型及其对应关键字",
-		" -['session']关键词:['paddle', 'pdl', 'nine', '原神', 'genshin']",
-		" -['session_dfine']关键词:['dfine', 'click', 'memo', 'note', '便笺', '‌便笺‌']",
-		" -['session_yolo11n', 'session_dino3', 'session_dino_cf']关键词:['multi', 'dino', 'click2', '星穹铁道', '崩铁', '绝区零', 'zzz', 'hkrpg']",
-		" -['session_grid']关键词:['grid', '九宫格', 'nine_grid']",
-		" -['session_direction']关键词:['direction', '方向', 'icon_direction']",
-		" -['session_symbols']关键词:['symbols', 'symbol', '图标', 'icon']",
-		" -['session_word']关键词:['word', '文字', '字符', 'text', '单词']",
-		" -['session_phrase']关键词:['phrase', '短语', '短句', '成语', '词语']",
+	result := []string{"以下是所有可用模型及其对应关键字"}
+	descriptions := []struct {
+		group string
+		text  string
+	}{
+		{"pdl", " -['session']关键词:['paddle', 'pdl', 'nine', '原神', 'genshin']"},
+		{"dfine", " -['session_dfine']关键词:['dfine', 'click', 'memo', 'note', '便笺', '‌便笺‌']"},
+		{"multi", " -['session_yolo11n', 'session_dino3', 'session_dino_cf']关键词:['multi', 'dino', 'click2', '星穹铁道', '崩铁', '绝区零', 'zzz', 'hkrpg']"},
+		{"grid", " -['session_grid']关键词:['grid', '九宫格', 'nine_grid']"},
+		{"direction", " -['session_direction']关键词:['direction', '方向', 'icon_direction']"},
+		{"symbols", " -['session_symbols']关键词:['symbols', 'symbol', '图标', 'icon']"},
+		{"word", " -['session_word']关键词:['word', '文字', '字符', 'text', '单词']"},
+		{"phrase", " -['session_phrase']关键词:['phrase', '短语', '短句', '成语', '词语']"},
 	}
+	for _, item := range descriptions {
+		if r.enabled[item.group] {
+			result = append(result, item.text)
+		}
+	}
+	return result
 }
 
 func (r *Registry) LoadModel(ctx context.Context, name string) ([]string, error) {

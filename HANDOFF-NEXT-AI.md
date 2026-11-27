@@ -54,8 +54,8 @@
    - **pt=2 上线前验证记录（2026-11-26）**：用 sm-crypto@0.3.13 对 Go 产物做交叉解密，4 组 payload 的 SM2 封装均解出 16 字节 ASCII 密钥、SM4 解出原文，`PASSED`。由此发现并修正了拼接顺序：sm-crypto 的 `C1C2C3=0`、`C1C3C2=1`，TS 调用 `doEncrypt(...,0)`，因此服务端要求 **x||y||C2||C3**（此前误用 C1C3C2）。验证脚本为一次性运行，未入库。
    - 已补 `internal/v4/resources/v1.9.10-config.json`（`v1.9.10-be7fe1`，对应当前线上构建）；`/load` 的 pt 会以日志字段 `payload_protocol` 输出，线上出现 pt=2 时可直接确认。
    - 遗留：线上样本目前只观测到 pt=1，pt=2 只能靠上述交叉验证兜底；若后续抓到 pt=2 的真实 challenge，再按 `curl /pass_v4?captcha_id=...` 做一次真机回归。
-5. **Worker/IPC**：`packages/captcha/src/runtime/worker.ts` —— 移植为 Go worker，空闲 1 分钟自动退出。
-6. **离线镜像**：Dockerfile 已存在，需把 V3+V4 模型以**普通文件**（非 go:embed、非运行时下载）烤进镜像；resources 数据文件已 go:embed。Dockerfile 环境变量约定：`use_pdl/use_dfine/use_multi`、`MODEL_PRELOAD=false`、`MODEL_IDLE_TIMEOUT=10m`、`LOG_LEVEL=INFO`、`DINO_RANDOM_OFFSET=1`、`ONNXRUNTIME_SHARED_LIBRARY_PATH=/usr/lib/libonnxruntime.so.1.31.0`
+5. **（已完成）Worker/IPC**：新增 `cmd/captcha-gateway` + `captcha-tools -worker`；V3/V4 各一个 worker 进程，Unix Socket，空闲 `WORKER_IDLE_TIMEOUT`（默认 1m）后进程退出，由 OS 回收模型内存。模型组不再进程内闲置卸载。
+6. **离线镜像**：Dockerfile 已存在，需把 V3+V4 模型以**普通文件**（非 go:embed、非运行时下载）烤进镜像；resources 数据文件已 go:embed。Dockerfile 环境变量约定：`MODE=all`、`WORKER_IDLE_TIMEOUT=1m`、`WORKER_START_TIMEOUT=2m`、`WORKER_REQUEST_TIMEOUT=3m`、`use_pdl/use_dfine/use_multi/use_grid`、`LOG_LEVEL=INFO`、`DINO_RANDOM_OFFSET=1`、`ONNXRUNTIME_SHARED_LIBRARY_PATH=/usr/lib/libonnxruntime.so.1.31.0`。旧的 `MODEL_PRELOAD=false`、`MODEL_IDLE_TIMEOUT=10m` 不再作为推荐配置。
 7. **测试与验收**：V3 金标基线回归（需真实 ONNX + libjpeg-turbo 环境）；V4 各求解器单测（必须 onnx-free，模型相关测试用假数据/跳过）；真机米哈游滑块+图标验证；50 次启停无僵尸进程；RSS/内存日志。
 
 ## 三、关键约定与技术要点（移植时逐条对照）

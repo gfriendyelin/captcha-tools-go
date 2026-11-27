@@ -7,9 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -18,10 +20,12 @@ import (
 	"github.com/kafuneri/captcha-tools-go/internal/geetest"
 	"github.com/kafuneri/captcha-tools-go/internal/inference"
 	"github.com/kafuneri/captcha-tools-go/internal/logging"
+	"github.com/kafuneri/captcha-tools-go/internal/procmon"
 	"github.com/kafuneri/captcha-tools-go/internal/server"
 	"github.com/kafuneri/captcha-tools-go/internal/solver"
 	"github.com/kafuneri/captcha-tools-go/internal/storage"
 	"github.com/kafuneri/captcha-tools-go/internal/v4"
+	"github.com/kafuneri/captcha-tools-go/internal/worker"
 )
 
 type flowAdapter struct{ client *geetest.Client }
@@ -90,7 +94,16 @@ func (f *v4FlowAdapter) Submit(ctx context.Context) (json.RawMessage, bool, erro
 
 func (f *v4FlowAdapter) Close() error { return nil }
 
+type runtime struct {
+	cfg      config.Config
+	logger   *slog.Logger
+	registry *inference.Registry
+	v4Client *v4.Client
+	handler  http.Handler
+}
+
 func main() {
+	workerMode := flag.Bool("worker", false, "run a mode-specific worker on WORKER_SOCKET")
 	healthcheck := flag.Bool("healthcheck", false, "query the local /healthz endpoint and exit")
 	flag.Parse()
 	cfg, err := config.Load()
@@ -98,7 +111,7 @@ func main() {
 		fatal(err)
 	}
 	if *healthcheck {
-		if err := checkHealth(cfg.Port); err != nil {
+		if err := checkHealth(cfg, *workerMode); err != nil {
 			fatal(err)
 		}
 		return
@@ -109,56 +122,80 @@ func main() {
 	}
 	defer logCloser.Close()
 	slog.SetDefault(logger)
-	store, err := storage.New(cfg.WorkDir, cfg.SaveDir)
-	if err != nil {
-		logger.Error("initialize storage failed", "error", err)
+	if *workerMode && cfg.Mode == config.ModeAll {
+		fatal(fmt.Errorf("MODE must be v3 or v4 when -worker is used"))
+	}
+	if err := run(cfg, *workerMode, logger, level); err != nil {
+		logger.Error("service stopped with error", "error", err)
 		os.Exit(1)
 	}
-	registry := inference.NewRegistry(cfg, logger)
-	if len(cfg.Preload) > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		err = registry.Preload(ctx, cfg.Preload)
-		cancel()
-		if err != nil {
-			logger.Error("model preload failed", "error", err)
-			os.Exit(1)
-		}
-	}
-	flows := func(gt, challenge string) (server.Flow, error) {
-		client, err := geetest.NewClient(gt, challenge, geetest.Config{Timeout: cfg.HTTPTimeout, MaxResponseSize: cfg.MaxImageBytes})
-		if err != nil {
-			return nil, err
-		}
-		return &flowAdapter{client: client}, nil
-	}
-	v4Client, err := v4.NewClient(v4.Config{Timeout: cfg.HTTPTimeout, MaxResponseSize: cfg.MaxImageBytes})
+}
+
+func run(cfg config.Config, workerMode bool, logger *slog.Logger, level *slog.LevelVar) error {
+	runtime, err := buildRuntime(cfg, logger, level)
 	if err != nil {
-		logger.Error("initialize v4 client failed", "error", err)
-		os.Exit(1)
+		return err
 	}
-	defer v4Client.Close()
-	v4Flows := func(challenge server.V4Challenge) (server.V4Flow, error) {
-		return &v4FlowAdapter{
-			client:   v4Client,
-			registry: registry,
-			challenge: v4.Challenge{
-				CaptchaID:  challenge.CaptchaID,
-				ClientType: challenge.ClientType,
-				RiskType:   challenge.RiskType,
-				Lang:       challenge.Lang,
-				Voice:      challenge.Voice,
-			},
-		}, nil
+	defer runtime.close()
+
+	isWorker := workerMode || cfg.WorkerSocket != ""
+	var listener net.Listener
+	var socketPath string
+	if isWorker {
+		socketPath = cfg.WorkerSocket
+		if socketPath == "" {
+			socketPath = filepath.Join(os.TempDir(), fmt.Sprintf("captcha-worker-%d.sock", os.Getpid()))
+		}
+		if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
+			return fmt.Errorf("create worker socket directory: %w", err)
+		}
+		_ = os.Remove(socketPath)
+		listener, err = net.Listen("unix", socketPath)
+		if err != nil {
+			return fmt.Errorf("listen worker socket: %w", err)
+		}
+		_ = os.Chmod(socketPath, 0o600)
+		defer os.Remove(socketPath)
+	} else {
+		listener, err = net.Listen("tcp", ":"+strconv.Itoa(cfg.Port))
+		if err != nil {
+			return err
+		}
 	}
-	handler := server.New(server.Options{Predictor: registry, Flows: flows, V4Flows: v4Flows, Models: registry, Store: store}, level)
-	httpServer := &http.Server{Addr: ":" + strconv.Itoa(cfg.Port), Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
+
+	var idleTracker *worker.IdleTracker
+	handler := runtime.handler
+	if isWorker && cfg.WorkerIdleTimeout > 0 {
+		idleTracker = worker.NewIdleTracker(handler, cfg.WorkerIdleTimeout)
+		handler = idleTracker
+	}
+	httpServer := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
+
+	idleCh := make(chan struct{})
+	trackerCtx, stopTracker := context.WithCancel(context.Background())
+	defer stopTracker()
+	if idleTracker != nil {
+		go idleTracker.Run(trackerCtx, idleCh)
+	}
+
 	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("captcha Go service listening", "address", "http://0.0.0.0:"+strconv.Itoa(cfg.Port), "preload", cfg.Preload, "idle_timeout", cfg.ModelIdleTimeout)
-		errCh <- httpServer.ListenAndServe()
+		address := "http://0.0.0.0:" + strconv.Itoa(cfg.Port)
+		if isWorker {
+			address = "unix://" + socketPath
+		}
+		logger.Info("captcha Go service listening",
+			"mode", cfg.Mode,
+			"address", address,
+			"preload", cfg.Preload,
+			"idle_timeout", cfg.WorkerIdleTimeout,
+		)
+		errCh <- httpServer.Serve(listener)
 	}()
+
+	idled := false
 	select {
 	case <-signalCtx.Done():
 		logger.Info("shutdown signal received")
@@ -166,36 +203,135 @@ func main() {
 		if !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("HTTP server failed", "error", err)
 		}
+	case <-idleCh:
+		idled = true
+		logger.Info("worker idle exit", "mode", cfg.Mode, "idle_timeout", cfg.WorkerIdleTimeout, "rss_bytes", rss())
 	}
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	err = errors.Join(err, httpServer.Shutdown(shutdownCtx))
 	if shutdownCtx.Err() != nil {
 		err = errors.Join(err, httpServer.Close())
 	}
 	cancel()
-	modelCtx, modelCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
-	if closeErr := registry.Close(modelCtx); closeErr != nil {
-		err = errors.Join(err, closeErr)
+	stopTracker()
+	if idled {
+		logger.Info("worker stopped after idle timeout", "mode", cfg.Mode)
 	}
-	modelCancel()
-	if destroyErr := inference.DestroyEnvironment(); destroyErr != nil {
-		err = errors.Join(err, destroyErr)
-	}
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Error("service stopped with error", "error", err)
-		os.Exit(1)
-	}
-	logger.Info("captcha Go service stopped")
+	return err
 }
 
-func checkHealth(port int) error {
+func buildRuntime(cfg config.Config, logger *slog.Logger, level *slog.LevelVar) (*runtime, error) {
+	store, err := storage.New(cfg.WorkDir, cfg.SaveDir)
+	if err != nil {
+		return nil, fmt.Errorf("initialize storage: %w", err)
+	}
+	registry := inference.NewRegistry(cfg, logger)
+	if len(cfg.Preload) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.WorkerStartTimeout)
+		err = registry.Preload(ctx, cfg.Preload)
+		cancel()
+		if err != nil {
+			_ = registry.Close(context.Background())
+			return nil, fmt.Errorf("model preload failed: %w", err)
+		}
+	}
+
+	rt := &runtime{cfg: cfg, logger: logger, registry: registry}
+	var flows server.FlowFactory
+	if cfg.Mode.IncludesV3() {
+		flows = func(gt, challenge string) (server.Flow, error) {
+			client, err := geetest.NewClient(gt, challenge, geetest.Config{Timeout: cfg.HTTPTimeout, MaxResponseSize: cfg.MaxImageBytes})
+			if err != nil {
+				return nil, err
+			}
+			return &flowAdapter{client: client}, nil
+		}
+	}
+	var v4Flows server.V4FlowFactory
+	if cfg.Mode.IncludesV4() {
+		client, err := v4.NewClient(v4.Config{Timeout: cfg.HTTPTimeout, MaxResponseSize: cfg.MaxImageBytes})
+		if err != nil {
+			_ = registry.Close(context.Background())
+			return nil, fmt.Errorf("initialize v4 client: %w", err)
+		}
+		rt.v4Client = client
+		v4Flows = func(challenge server.V4Challenge) (server.V4Flow, error) {
+			return &v4FlowAdapter{
+				client:   client,
+				registry: registry,
+				challenge: v4.Challenge{
+					CaptchaID:  challenge.CaptchaID,
+					ClientType: challenge.ClientType,
+					RiskType:   challenge.RiskType,
+					Lang:       challenge.Lang,
+					Voice:      challenge.Voice,
+				},
+			}, nil
+		}
+	}
+	var predictor server.Predictor
+	if cfg.Mode.IncludesV3() {
+		predictor = registry
+	}
+	rt.handler = server.New(server.Options{
+		Mode:          string(cfg.Mode),
+		Predictor:     predictor,
+		Flows:         flows,
+		V4Flows:       v4Flows,
+		Models:        registry,
+		Store:         store,
+		SaveResult:    cfg.SaveResult,
+		DisableDelays: cfg.DisableDelays,
+	}, level)
+	return rt, nil
+}
+
+func (r *runtime) close() {
+	ctx, cancel := context.WithTimeout(context.Background(), r.cfg.ShutdownTimeout)
+	if err := r.registry.Close(ctx); err != nil {
+		r.logger.Error("close model registry failed", "error", err)
+	}
+	cancel()
+	if r.v4Client != nil {
+		r.v4Client.Close()
+	}
+	if err := inference.DestroyEnvironment(); err != nil {
+		r.logger.Error("destroy ONNX environment failed", "error", err)
+	}
+}
+
+func rss() uint64 {
+	value, err := procmon.RSS()
+	if err != nil {
+		return 0
+	}
+	return value
+}
+
+func checkHealth(cfg config.Config, workerMode bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(port)+"/healthz", nil)
+	client := http.DefaultClient
+	url := "http://127.0.0.1:" + strconv.Itoa(cfg.Port) + "/healthz"
+	if workerMode || cfg.WorkerSocket != "" {
+		socket := cfg.WorkerSocket
+		if socket == "" {
+			socket = filepath.Join(os.TempDir(), fmt.Sprintf("captcha-worker-%d.sock", os.Getpid()))
+		}
+		client = &http.Client{Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var dialer net.Dialer
+				return dialer.DialContext(ctx, "unix", socket)
+			},
+		}}
+		url = "http://unix/healthz"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}

@@ -17,6 +17,7 @@ ENV CGO_CFLAGS="-I/opt/libjpeg-turbo/include"
 ENV CGO_LDFLAGS="-L/opt/libjpeg-turbo/lib64"
 RUN mkdir -p /out
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -buildid=" -o /out/captcha-tools ./cmd/captcha-tools
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -buildid=" -o /out/captcha-gateway ./cmd/captcha-gateway
 
 FROM build AS test
 ENV LD_LIBRARY_PATH=/opt/libjpeg-turbo/lib64
@@ -35,11 +36,24 @@ COPY --from=libjpeg /out/opt/libjpeg-turbo/lib64/libjpeg.so* /opt/libjpeg-turbo/
 COPY --from=libjpeg /out/usr/share/doc/libjpeg-turbo-official-3.1.4.1/LICENSE.md /usr/share/doc/libjpeg-turbo/LICENSE.md
 RUN echo '/opt/libjpeg-turbo/lib64' > /etc/ld.so.conf.d/00-libjpeg-turbo.conf && ldconfig
 COPY --from=build /out/captcha-tools /app/captcha-tools
+COPY --from=build /out/captcha-gateway /app/captcha-gateway
 COPY model/ /app/model/
 RUN mkdir -p /app/img_2_val /app/img_saved /app/logs  && chown -R captcha:captcha /app
-ENV use_pdl=1 use_dfine=1 use_multi=1     MODEL_PRELOAD=false MODEL_IDLE_TIMEOUT=10m LOG_LEVEL=INFO     DINO_RANDOM_OFFSET=1     ONNXRUNTIME_SHARED_LIBRARY_PATH=/usr/lib/libonnxruntime.so.1.31.0
+ENV MODE=all \
+    WORKER_IDLE_TIMEOUT=1m \
+    WORKER_START_TIMEOUT=2m \
+    WORKER_REQUEST_TIMEOUT=3m \
+    WORK_DIR=/app/img_2_val \
+    SAVE_DIR=/app/img_saved \
+    LOG_LEVEL=INFO \
+    use_pdl=1 \
+    use_dfine=1 \
+    use_multi=1 \
+    use_grid=1 \
+    DINO_RANDOM_OFFSET=1 \
+    ONNXRUNTIME_SHARED_LIBRARY_PATH=/usr/lib/libonnxruntime.so.1.31.0
 USER captcha
 EXPOSE 9645
 VOLUME ["/app/img_saved", "/app/logs"]
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3  CMD ["/app/captcha-tools", "-healthcheck"]
-ENTRYPOINT ["/app/captcha-tools"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3  CMD ["/app/captcha-gateway", "-healthcheck"]
+ENTRYPOINT ["/app/captcha-gateway"]

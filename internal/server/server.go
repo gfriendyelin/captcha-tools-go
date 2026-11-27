@@ -24,6 +24,7 @@ type Server struct {
 	level         *slog.LevelVar
 	verifyDelay   time.Duration
 	disableDelays bool
+	defaultSave   bool
 	mux           *http.ServeMux
 }
 
@@ -31,14 +32,28 @@ func New(options Options, level *slog.LevelVar) *Server {
 	if options.VerifyDelay == 0 {
 		options.VerifyDelay = 4 * time.Second
 	}
+	mode := strings.ToLower(strings.TrimSpace(options.Mode))
+	if mode == "" {
+		mode = "all"
+	}
 	s := &Server{predictor: options.Predictor, flows: options.Flows, v4Flows: options.V4Flows, models: options.Models,
-		store: options.Store, level: level, verifyDelay: options.VerifyDelay, disableDelays: options.DisableDelays}
+		store: options.Store, level: level, verifyDelay: options.VerifyDelay, disableDelays: options.DisableDelays,
+		defaultSave: options.SaveResult}
 	s.mux = http.NewServeMux()
-	s.mux.HandleFunc("GET /pass_uni", s.passHandler(false))
-	s.mux.HandleFunc("GET /pass_nine", s.passHandler(false))
-	s.mux.HandleFunc("GET /pass_icon", s.passHandler(false))
-	s.mux.HandleFunc("GET /pass_hutao", s.passHandler(true))
-	s.mux.HandleFunc("GET /pass_v4", s.passV4Handler())
+	if mode == "all" || mode == "v3" {
+		s.mux.HandleFunc("GET /pass_uni", s.passHandler(false))
+		s.mux.HandleFunc("GET /pass_nine", s.passHandler(false))
+		s.mux.HandleFunc("GET /pass_icon", s.passHandler(false))
+		s.mux.HandleFunc("GET /pass_hutao", s.passHandler(true))
+	}
+	if mode == "all" || mode == "v4" {
+		s.mux.HandleFunc("GET /pass_v4", s.passV4Handler())
+	}
+	if mode == "v4" {
+		// The public gateway rewrites /pass_uni?version=4 by forwarding the same
+		// path to the V4 worker.
+		s.mux.HandleFunc("GET /pass_uni", s.passV4Handler())
+	}
 	s.mux.HandleFunc("GET /list_model", s.listModel)
 	s.mux.HandleFunc("GET /list_all_model", s.listAllModel)
 	s.mux.HandleFunc("GET /load_model", s.loadModel)
@@ -97,7 +112,7 @@ func (s *Server) passHandler(hutao bool) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		saveResult, valid := optionalBool(w, r, "save_result", false)
+		saveResult, valid := optionalBool(w, r, "save_result", s.defaultSave)
 		if !valid {
 			return
 		}
@@ -158,7 +173,7 @@ func (s *Server) passV4Handler() http.HandlerFunc {
 		if !ok {
 			return
 		}
-		saveResult, valid := optionalBool(w, r, "save_result", false)
+		saveResult, valid := optionalBool(w, r, "save_result", s.defaultSave)
 		if !valid {
 			return
 		}

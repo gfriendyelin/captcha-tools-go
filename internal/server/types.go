@@ -80,11 +80,13 @@ type ModelController interface {
 }
 
 type Options struct {
+	Mode          string
 	Predictor     Predictor
 	Flows         FlowFactory
 	V4Flows       V4FlowFactory
 	Models        ModelController
 	Store         *storage.Store
+	SaveResult    bool
 	VerifyDelay   time.Duration
 	DisableDelays bool
 }

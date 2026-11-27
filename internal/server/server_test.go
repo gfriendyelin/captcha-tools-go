@@ -74,6 +74,33 @@ func (m *fakeModels) UnloadModel(_ context.Context, _ string) ([]string, error) 
 	return m.ListModels(), nil
 }
 
+func TestModeRouteIsolation(t *testing.T) {
+	_, level, closer, err := logging.New("INFO", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = closer.Close() })
+
+	v3 := New(Options{Mode: "v3"}, level)
+	recorder := httptest.NewRecorder()
+	v3.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/pass_v4?captcha_id=x", nil))
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("v3 /pass_v4 = %d, want 404", recorder.Code)
+	}
+
+	v4 := New(Options{Mode: "v4"}, level)
+	recorder = httptest.NewRecorder()
+	v4.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/pass_nine?gt=x&challenge=y", nil))
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("v4 /pass_nine = %d, want 404", recorder.Code)
+	}
+	recorder = httptest.NewRecorder()
+	v4.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/pass_uni", nil))
+	if recorder.Code == http.StatusNotFound {
+		t.Fatalf("v4 /pass_uni should be the V4 alias, got 404")
+	}
+}
+
 type fixture struct {
 	handler   http.Handler
 	predictor *fakePredictor

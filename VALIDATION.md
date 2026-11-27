@@ -79,3 +79,30 @@
 6. **未修改或替换原 Python 容器**：没有停止、占用或替换 test-nine。
 
 完成 Docker 部署后，应继续进行：启动检查、API 对照、懒加载/闲时卸载、重载延迟、内存/CPU、并发和长期稳定性验证。
+
+## 2026-11-27 架构调整：gateway + 独立 worker
+
+本次把“模型组闲置卸载”改为“worker 进程闲置退出”，并拆出 V3/V4 独立 worker：
+
+- `cmd/captcha-gateway`：常驻 HTTP 入口，不加载模型；按 `MODE` 管理 V3/V4 worker 子进程。
+- `cmd/captcha-tools -worker`：由 gateway 拉起，V3/V4 各一个进程，使用 Unix Socket。
+- `WORKER_IDLE_TIMEOUT=1m` 到期且无在途请求时 worker 退出，由操作系统回收模型内存。
+- `MODEL_IDLE_TIMEOUT` 不再控制模型组卸载，仅作为 `WORKER_IDLE_TIMEOUT` 的兼容别名。
+- `MODE=all` 时对外统一入口 `/pass_uni?version=3|4`；旧 `/pass_nine`、`/pass_icon`、`/pass_v4` 保留。
+- 模型调用关系未改：V3 `icon` → Multi，`icon1` → D-FINE；V4 九宫格 → Grid；V3 九宫格语义兜底才使用 Grid。
+
+本次已执行的自动化验证：
+
+- `go test ./...`：通过。
+- `go test -race ./...`：通过。
+- `go vet ./...`：通过。
+- `go build ./cmd/captcha-tools ./cmd/captcha-gateway`：通过（本机环境）。
+- 新增单测覆盖：配置 mode/预加载拆分、server 路由隔离、gateway 统一版本判定/未启动 worker 的管理接口、worker 闲置退出与在途请求保护。
+
+仍需在具备模型和 Docker 的部署环境执行：
+
+1. 启动后确认进程树为 gateway + V3 worker；V4 worker 在首个 V4 请求后出现。
+2. 确认 V3 worker 只预加载 `pdl`、`dfine`；V4 worker 默认无模型。
+3. 等待 `WORKER_IDLE_TIMEOUT` 后确认对应 worker 进程消失、容器 RSS 回落，并再次请求自动拉起。
+4. 连续 10 次“请求 → 闲置退出”循环，记录 RSS 不再增长。
+5. 单容器 `MODE=all` 与双容器 `MODE=v3`/`MODE=v4` 两种部署的 API、Docker healthcheck 和内存基线。
