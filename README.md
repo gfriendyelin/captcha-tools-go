@@ -27,59 +27,130 @@ Geetest 点选验证码的 Go 实现。服务由两部分组成：
 - gateway 的 `/healthz` 永远在本地响应，不会因为 Docker healthcheck 而不断唤醒 worker。
 - `MODE=all` 是单容器默认值；`MODE=v3` / `MODE=v4` 用于拆成两个容器。
 
-## 2. 构建与单容器部署
+## 2. Docker 部署
 
-构建前先把模型按第 4 节放到 `model/` 目录；Dockerfile 会把它复制进镜像。
+已构建镜像：`ghcr.io/gfriendyelin/captcha-tools-go:latest`。公开镜像无需登录即可拉取；如果 GHCR 仓库设为私有，需要先使用 GitHub PAT 执行 `docker login ghcr.io`。
+
+### 2.1 单容器部署（推荐）
+
+无需准备源码。以下命令同时启用 V3 和 V4，映射到宿主机 `19645` 端口：
 
 ```bash
-docker build -t captcha-tools-go:local .
+docker pull ghcr.io/gfriendyelin/captcha-tools-go:latest
 
-docker run -d --name captcha-all \
+docker run -d \
+  --name captcha-all \
+  --restart unless-stopped \
   -p 19645:9645 \
   -e MODE=all \
   -e WORKER_IDLE_TIMEOUT=1m \
   -e WORK_DIR=/app/img_2_val \
   -e SAVE_DIR=/app/img_saved \
+  -e LOG_LEVEL=INFO \
   -v captcha-saved:/app/img_saved \
   -v captcha-logs:/app/logs \
   --tmpfs /app/img_2_val:rw,noexec,nosuid,size=512m \
-  captcha-tools-go:local
+  ghcr.io/gfriendyelin/captcha-tools-go:latest
 ```
 
-如果模型不打进镜像，挂载模型目录：
+如果镜像没有内置模型，在 `docker run` 的镜像地址之前额外添加以下参数。`/opt/captcha/model` 请替换为宿主机模型目录的绝对路径，目录结构见第 4 节：
 
 ```bash
--v /host/path/model:/app/model:ro -e MODEL_DIR=/app/model
+  -v /opt/captcha/model:/app/model:ro \
+  -e MODEL_DIR=/app/model \
 ```
 
-验证：
+检查容器和日志：
 
 ```bash
-curl -s http://127.0.0.1:19645/healthz
-curl -s http://127.0.0.1:19645/readyz
+docker ps --filter name=captcha-all
+docker logs --tail 100 captcha-all
+curl --fail http://127.0.0.1:19645/healthz
 ```
 
-`/healthz` 只表示 gateway 存活；`/readyz` 会显示当前已经拉起的 worker。V4 默认是懒加载，所以只启动 V3 时 `/readyz` 可能返回 503，这是正常的，不要把 `/readyz` 配成 Docker healthcheck。
-
-### 可选：两个容器
-
-同一个镜像可以起两个容器，镜像层共享，不会多一份模型文件：
+统一调用示例：
 
 ```bash
-docker run -d --name captcha-v3 -p 19645:9645 \
-  -e MODE=v3 -e WORKER_IDLE_TIMEOUT=1m \
-  -v captcha-v3-saved:/app/img_saved -v captcha-v3-logs:/app/logs \
+# V3
+curl -G http://127.0.0.1:19645/pass_uni \
+  --data-urlencode version=3 \
+  --data-urlencode gt=你的gt \
+  --data-urlencode challenge=你的challenge
+
+# V4
+curl -G http://127.0.0.1:19645/pass_uni \
+  --data-urlencode version=4 \
+  --data-urlencode captcha_id=你的captcha_id
+```
+
+`GET /readyz` 可查看 worker 状态。V4 默认懒加载，因此 V4 尚未被调用时，`MODE=all` 下的 `/readyz` 可能返回 503；Docker 健康检查使用 `/healthz`，不要使用 `/readyz`。
+
+更新到最新镜像：
+
+```bash
+docker pull ghcr.io/gfriendyelin/captcha-tools-go:latest
+docker stop captcha-all
+docker rm captcha-all
+# 再执行上面的 docker run 命令；命名卷中的结果和日志会保留。
+```
+
+### 2.2 可选：两个容器
+
+V3 使用 `19645`，V4 使用 `19646`。两个容器使用同一镜像，Docker 会共享镜像层，不会重复保存模型文件：
+
+```bash
+docker run -d \
+  --name captcha-v3 \
+  --restart unless-stopped \
+  -p 19645:9645 \
+  -e MODE=v3 \
+  -e WORKER_IDLE_TIMEOUT=1m \
+  -v captcha-v3-saved:/app/img_saved \
+  -v captcha-v3-logs:/app/logs \
   --tmpfs /app/img_2_val:rw,noexec,nosuid,size=512m \
-  captcha-tools-go:local
+  ghcr.io/gfriendyelin/captcha-tools-go:latest
 
-docker run -d --name captcha-v4 -p 19646:9645 \
-  -e MODE=v4 -e WORKER_IDLE_TIMEOUT=1m \
-  -v captcha-v4-saved:/app/img_saved -v captcha-v4-logs:/app/logs \
+docker run -d \
+  --name captcha-v4 \
+  --restart unless-stopped \
+  -p 19646:9645 \
+  -e MODE=v4 \
+  -e WORKER_IDLE_TIMEOUT=1m \
+  -v captcha-v4-saved:/app/img_saved \
+  -v captcha-v4-logs:/app/logs \
   --tmpfs /app/img_2_val:rw,noexec,nosuid,size=512m \
-  captcha-tools-go:local
+  ghcr.io/gfriendyelin/captcha-tools-go:latest
 ```
 
-单容器和两个容器的主要区别是故障隔离：单容器共用一个内存上限，gateway 故障会同时影响 V3/V4；两个容器可以分别限制内存和重启。
+此时分别访问 `http://127.0.0.1:19645/pass_uni`（V3）和 `http://127.0.0.1:19646/pass_v4`（V4）。单容器和两个容器的主要区别是故障隔离：单容器共用一个内存上限，gateway 故障会同时影响 V3/V4；两个容器可以分别限制内存和重启。
+
+### 2.3 可选：Docker Compose（源码构建）
+
+项目自带的 `docker-compose.yml` 保留本地构建配置。需要准备完整源码，并按第 4 节把模型放到 `model/`：
+
+```bash
+docker compose up -d --build
+docker compose ps
+docker compose logs -f captcha-tools-go
+```
+
+停止服务：
+
+```bash
+docker compose down
+```
+
+如果只使用 GHCR 现成镜像、不需要从源码构建，直接使用第 2.1 或 2.2 节的 `docker run` 命令即可。
+
+### 2.4 可选：从源码构建
+
+构建前先把模型按第 4 节放到 `model/` 目录，Dockerfile 会把它复制进镜像：
+
+```bash
+docker build -t captcha-tools-go:local .
+```
+
+构建完成后，将上述 `docker run` 命令最后的镜像名替换为 `captcha-tools-go:local`；也可以按第 2.3 节使用 Docker Compose。
 
 ## 3. HTTP API
 
