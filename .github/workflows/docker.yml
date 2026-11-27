@@ -1,0 +1,152 @@
+name: Docker CI
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      push_image:
+        description: "Push the multi-architecture image to GHCR"
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    name: Linux Go tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run tests in the Linux Docker builder
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: test
+          push: false
+          cache-from: type=gha,scope=captcha-tools-test
+          cache-to: type=gha,mode=max,scope=captcha-tools-test
+
+  smoke:
+    name: Final image smoke test
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the final amd64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: captcha-tools-go:smoke
+          cache-from: type=gha,scope=captcha-tools
+          cache-to: type=gha,mode=max,scope=captcha-tools
+
+      - name: Start the container
+        run: |
+          docker run --detach             --name captcha-tools-go-smoke             --publish 19645:9645             --env MODE=v3             --env MODEL_PRELOAD=false             --env WORKER_IDLE_TIMEOUT=0             --env MODEL_DIR=/app/model             captcha-tools-go:smoke
+          sleep 3
+          docker ps -a
+          docker inspect --format 'status={{.State.Status}} exit={{.State.ExitCode}} error={{.State.Error}}' captcha-tools-go-smoke || true
+          docker logs captcha-tools-go-smoke || true
+
+      - name: Check health and real model lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error             --retry 30 --retry-all-errors --retry-delay 2             http://127.0.0.1:19645/healthz
+          header='["以下是当前加载的模型及其对应关键字"]'
+          models=$(curl --fail --silent --show-error http://127.0.0.1:19645/list_model)
+          test "$models" = "$header"
+          loaded=$(curl --fail --silent --show-error 'http://127.0.0.1:19645/load_model?name=pdl')
+          grep -F -- '-session,关键词' <<<"$loaded"
+          unloaded=$(curl --fail --silent --show-error 'http://127.0.0.1:19645/unload_model?name=pdl')
+          test "$unloaded" = "$header"
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker logs captcha-tools-go-smoke
+
+      - name: Remove smoke-test container
+        if: always()
+        run: docker rm -f captcha-tools-go-smoke
+
+  build-and-push:
+    name: Build and publish multi-architecture image
+    needs: smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Generate image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: latest=false
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+      - name: Log in to GHCR
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.push_image) }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and optionally push amd64/arm64 images
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.push_image) }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=captcha-tools
+          cache-to: type=gha,mode=max,scope=captcha-tools
+          provenance: mode=max
+          sbom: true
