@@ -15,11 +15,11 @@ Geetest 点选验证码的 Go 实现。服务由两部分组成：
     ├── captcha-tools -worker (MODE=v3)
     │     ├── 默认预加载 PP-HGNetV2-B4.onnx + d-fine-n.onnx
     │     ├── 按需加载 Multi / Grid
-    │     └── 空闲 1 分钟退出
+    │     └── 空闲 5 分钟退出
     └── captcha-tools -worker (MODE=v4)
           ├── 默认不加载
           ├── 按需加载 Grid / Direction / Symbols / Word / Phrase
-          └── 空闲 1 分钟退出
+          └── 空闲 5 分钟退出
 ```
 
 - V3 worker 在容器启动时拉起并预加载 `pdl`、`dfine`；V4 worker 在第一个 V4 请求到来时才拉起。
@@ -43,7 +43,7 @@ docker run -d \
   --restart unless-stopped \
   -p 19645:9645 \
   -e MODE=all \
-  -e WORKER_IDLE_TIMEOUT=1m \
+  -e WORKER_IDLE_TIMEOUT=5m \
   -e WORK_DIR=/app/img_2_val \
   -e SAVE_DIR=/app/img_saved \
   -e LOG_LEVEL=INFO \
@@ -104,7 +104,7 @@ docker run -d \
   --restart unless-stopped \
   -p 19645:9645 \
   -e MODE=v3 \
-  -e WORKER_IDLE_TIMEOUT=1m \
+  -e WORKER_IDLE_TIMEOUT=5m \
   -v captcha-v3-saved:/app/img_saved \
   -v captcha-v3-logs:/app/logs \
   --tmpfs /app/img_2_val:rw,noexec,nosuid,size=512m \
@@ -115,7 +115,7 @@ docker run -d \
   --restart unless-stopped \
   -p 19646:9645 \
   -e MODE=v4 \
-  -e WORKER_IDLE_TIMEOUT=1m \
+  -e WORKER_IDLE_TIMEOUT=5m \
   -v captcha-v4-saved:/app/img_saved \
   -v captcha-v4-logs:/app/logs \
   --tmpfs /app/img_2_val:rw,noexec,nosuid,size=512m \
