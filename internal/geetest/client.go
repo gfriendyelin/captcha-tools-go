@@ -27,6 +27,11 @@ const (
 	DefaultTimeout       = 5 * time.Second
 	DefaultMaxBodyBytes  = int64(16 << 20)
 	browserUserAgent     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
+	// maxAttempts bounds the per-request retries in get: transport failures,
+	// empty bodies and 5xx responses are repeated, everything else is not.
+	maxAttempts   = 3
+	retryInterval = 150 * time.Millisecond
 )
 
 var ErrResponseTooLarge = errors.New("geetest: response body exceeds configured limit")
@@ -546,7 +551,7 @@ func addQuery(rawURL string, params []queryParam) (string, error) {
 	return u.String(), nil
 }
 
-func (c *Client) get(ctx context.Context, rawURL string) (body []byte, err error) {
+func (c *Client) get(ctx context.Context, rawURL string) ([]byte, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("geetest: nil context")
 	}
@@ -555,9 +560,29 @@ func (c *Client) get(ctx context.Context, rawURL string) (body []byte, err error
 		ctx, cancel = context.WithTimeout(ctx, c.timeout)
 		defer cancel()
 	}
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			if err := c.sleep(ctx, retryInterval*time.Duration(attempt)); err != nil {
+				return nil, err
+			}
+		}
+		body, retryable, err := c.getOnce(ctx, rawURL)
+		if err == nil {
+			return body, nil
+		}
+		lastErr = err
+		if !retryable || ctx.Err() != nil {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+func (c *Client) getOnce(ctx context.Context, rawURL string) (body []byte, retryable bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	req.Header.Set("User-Agent", browserUserAgent)
 	for _, cookie := range c.jar.Cookies(req.URL) {
@@ -568,10 +593,10 @@ func (c *Client) get(ctx context.Context, rawURL string) (body []byte, err error
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()
 		}
-		return nil, err
+		return nil, ctx.Err() == nil, err
 	}
 	if resp == nil || resp.Body == nil {
-		return nil, fmt.Errorf("geetest: HTTP doer returned an empty response")
+		return nil, true, fmt.Errorf("geetest: HTTP doer returned an empty response")
 	}
 	c.jar.SetCookies(req.URL, resp.Cookies())
 	defer func() {
@@ -579,15 +604,18 @@ func (c *Client) get(ctx context.Context, rawURL string) (body []byte, err error
 			err = closeErr
 		}
 	}()
+	if resp.StatusCode >= 500 {
+		return nil, true, fmt.Errorf("geetest: upstream returned %s", resp.Status)
+	}
 	limited := io.LimitReader(resp.Body, c.maxBody+1)
 	body, err = io.ReadAll(limited)
 	if err != nil {
-		return nil, err
+		return nil, ctx.Err() == nil, err
 	}
 	if int64(len(body)) > c.maxBody {
-		return nil, fmt.Errorf("%w (%d bytes)", ErrResponseTooLarge, c.maxBody)
+		return nil, false, fmt.Errorf("%w (%d bytes)", ErrResponseTooLarge, c.maxBody)
 	}
-	return body, nil
+	return body, false, nil
 }
 
 func sleepContext(ctx context.Context, duration time.Duration) error {

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -330,6 +331,62 @@ func TestContextTimeout(t *testing.T) {
 	_, err = client.get(context.Background(), "http://example.test/slow")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestGetRetriesTransientFailures(t *testing.T) {
+	var calls int32
+	client, err := NewClient("gt", "challenge", Config{
+		Doer: HTTPDoerFunc(func(*http.Request) (*http.Response, error) {
+			if atomic.AddInt32(&calls, 1) == 1 {
+				return &http.Response{StatusCode: http.StatusBadGateway, Body: io.NopCloser(strings.NewReader("nope"))}, nil
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok"))}, nil
+		}),
+		AESKey: testAESKey,
+		EncKey: testEncKey(),
+		Sleep:  func(context.Context, time.Duration) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	body, err := client.get(context.Background(), "http://example.test/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "ok" {
+		t.Fatalf("body = %q", body)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+}
+
+func TestGetDoesNotRetryClientErrors(t *testing.T) {
+	var calls int32
+	client, err := NewClient("gt", "challenge", Config{
+		Doer: HTTPDoerFunc(func(*http.Request) (*http.Response, error) {
+			atomic.AddInt32(&calls, 1)
+			return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader("missing"))}, nil
+		}),
+		AESKey: testAESKey,
+		EncKey: testEncKey(),
+		Sleep:  func(context.Context, time.Duration) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	body, err := client.get(context.Background(), "http://example.test/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "missing" {
+		t.Fatalf("body = %q", body)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
 	}
 }
 

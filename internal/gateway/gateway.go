@@ -440,7 +440,7 @@ func (w *worker) stop(ctx context.Context) error {
 }
 
 func (w *worker) proxy(wr http.ResponseWriter, r *http.Request) {
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < 3; attempt++ {
 		if err := w.ensure(r.Context()); err != nil {
 			writeJSON(wr, http.StatusServiceUnavailable, map[string]string{"detail": err.Error()})
 			return
@@ -458,7 +458,7 @@ func (w *worker) proxy(wr http.ResponseWriter, r *http.Request) {
 			writeJSON(wr, http.StatusGatewayTimeout, map[string]string{"detail": r.Context().Err().Error()})
 			return
 		}
-		if attempt == 0 {
+		if attempt < 2 {
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}

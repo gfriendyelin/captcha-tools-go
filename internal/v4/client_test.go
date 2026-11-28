@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -47,6 +48,51 @@ func aiChallenge(pt string) string {
 		"payload_protocol":1,
 		"guard":true
 	}})`, testStaticPath, pt)
+}
+
+func TestOpenRetriesServerErrors(t *testing.T) {
+	var calls int32
+	client, _ := newTestClient(t,
+		func(w http.ResponseWriter, _ *http.Request) {
+			if atomic.AddInt32(&calls, 1) == 1 {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			fmt.Fprint(w, aiChallenge("0"))
+		},
+		func(w http.ResponseWriter, _ *http.Request) {
+			fmt.Fprint(w, `geetest_2({"status":"success","data":{"result":"success","seccode":{"captcha_id":"site-1"}}})`)
+		})
+
+	session, err := client.Open(context.Background(), Challenge{CaptchaID: "site-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Kind() != "silent" {
+		t.Fatalf("kind %q", session.Kind())
+	}
+	if calls != 2 {
+		t.Fatalf("load calls = %d, want 2", calls)
+	}
+}
+
+func TestOpenDoesNotRetryClientErrors(t *testing.T) {
+	var calls int32
+	client, _ := newTestClient(t,
+		func(w http.ResponseWriter, _ *http.Request) {
+			atomic.AddInt32(&calls, 1)
+			w.WriteHeader(http.StatusUnprocessableEntity)
+		},
+		func(w http.ResponseWriter, _ *http.Request) {
+			t.Fatal("verify must not be called")
+		})
+
+	if _, err := client.Open(context.Background(), Challenge{CaptchaID: "site-1"}); err == nil {
+		t.Fatal("expected an error")
+	}
+	if calls != 1 {
+		t.Fatalf("load calls = %d, want 1", calls)
+	}
 }
 
 func TestOpenAndSubmitSilent(t *testing.T) {

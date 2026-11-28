@@ -47,7 +47,7 @@ func (f *flowAdapter) Verify(ctx context.Context, points []string) (json.RawMess
 func (f *flowAdapter) Close() error { f.client.Close(); return nil }
 
 // v4FlowAdapter binds one V4 protocol session to the recognition registry. A
-// rotated protocol key re-opens the session and retries once.
+// retryable failure re-opens the session and tries again with a fresh puzzle.
 type v4FlowAdapter struct {
 	client    *v4.Client
 	registry  *inference.Registry
@@ -55,41 +55,97 @@ type v4FlowAdapter struct {
 	session   *v4.Session
 }
 
-func (f *v4FlowAdapter) Load(ctx context.Context) (server.V4Puzzle, error) {
-	session, err := f.client.Open(ctx, f.challenge)
-	if err != nil {
-		return server.V4Puzzle{}, err
+const (
+	// maxSolveAttempts bounds one V4 solve: network/5xx errors, a rotated
+	// protocol key and a non-passing verification all get a fresh challenge,
+	// while an unsupported build or a 4xx upstream answer is returned at once.
+	maxSolveAttempts = 3
+	retryInterval    = 150 * time.Millisecond
+)
+
+// retryableV4 reports whether opening a fresh session could fix the error.
+func retryableV4(err error) bool {
+	var protocolErr *v4.Error
+	return errors.As(err, &protocolErr) && protocolErr.Retryable
+}
+
+func sleepContext(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	f.session = session
+}
+
+func (f *v4FlowAdapter) Load(ctx context.Context) (server.V4Puzzle, error) {
+	var lastErr error
+	for attempt := 0; attempt < maxSolveAttempts; attempt++ {
+		if attempt > 0 {
+			if err := sleepContext(ctx, retryInterval*time.Duration(attempt)); err != nil {
+				return server.V4Puzzle{}, err
+			}
+		}
+		session, err := f.client.Open(ctx, f.challenge)
+		if err == nil {
+			f.session = session
+			return v4Puzzle(session), nil
+		}
+		lastErr = err
+		if !retryableV4(err) || ctx.Err() != nil {
+			return server.V4Puzzle{}, err
+		}
+	}
+	return server.V4Puzzle{}, lastErr
+}
+
+func v4Puzzle(session *v4.Session) server.V4Puzzle {
 	puzzle := session.Puzzle()
 	saved := puzzle.SaveAssets()
 	assets := make([]server.Artifact, len(saved))
 	for i, asset := range saved {
 		assets[i] = server.Artifact{Name: asset.Name, Data: asset.Data}
 	}
-	return server.V4Puzzle{Kind: puzzle.Kind, Assets: assets, PayloadProtocol: session.PT()}, nil
+	return server.V4Puzzle{Kind: puzzle.Kind, Assets: assets, PayloadProtocol: session.PT()}
 }
 
 func (f *v4FlowAdapter) Submit(ctx context.Context) (json.RawMessage, bool, error) {
-	for attempt := 0; ; attempt++ {
+	var lastRaw json.RawMessage
+	var lastPassed bool
+	var lastErr error
+	for attempt := 0; attempt < maxSolveAttempts; attempt++ {
+		if attempt > 0 {
+			if err := sleepContext(ctx, retryInterval*time.Duration(attempt)); err != nil {
+				return nil, false, err
+			}
+			session, openErr := f.client.Open(ctx, f.challenge)
+			if openErr != nil {
+				return nil, false, errors.Join(lastErr, openErr)
+			}
+			f.session = session
+		}
 		answer, err := solver.V4(ctx, f.registry, f.session.Puzzle())
 		if err != nil {
 			return nil, false, err
 		}
 		raw, passed, err := f.session.Submit(ctx, answer)
 		if err == nil {
-			return raw, passed, nil
-		}
-		if attempt == 0 && errors.Is(err, v4.ErrProtocolKeyUpdated) {
-			session, openErr := f.client.Open(ctx, f.challenge)
-			if openErr != nil {
-				return nil, false, errors.Join(err, openErr)
+			lastRaw, lastPassed = raw, passed
+			// A wrong answer is worth one more fresh challenge; the final
+			// attempt is always returned so the caller sees the real result.
+			if passed || attempt == maxSolveAttempts-1 {
+				return raw, passed, nil
 			}
-			f.session = session
 			continue
 		}
-		return nil, false, err
+		lastErr = err
+		if !retryableV4(err) || ctx.Err() != nil || attempt == maxSolveAttempts-1 {
+			return nil, false, err
+		}
 	}
+	return lastRaw, lastPassed, lastErr
 }
 
 func (f *v4FlowAdapter) Close() error { return nil }

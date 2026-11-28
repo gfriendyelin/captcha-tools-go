@@ -30,6 +30,11 @@ const (
 	defaultTimeout = 10 * time.Second
 	jsonpLimit     = 1 << 20
 	resourceLimit  = 8 << 20
+
+	// maxAttempts bounds the per-request retries in get: transport failures,
+	// empty bodies and 5xx responses are repeated, everything else is not.
+	maxAttempts   = 3
+	retryInterval = 150 * time.Millisecond
 )
 
 //go:embed resources/*-config.json
@@ -506,6 +511,29 @@ func (c *Client) get(ctx context.Context, rawURL string, limit int64) ([]byte, e
 		ctx, cancel = context.WithTimeout(ctx, c.timeout)
 		defer cancel()
 	}
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			if err := sleepContext(ctx, retryInterval*time.Duration(attempt)); err != nil {
+				return nil, err
+			}
+		}
+		body, err := c.getOnce(ctx, rawURL, limit)
+		if err == nil {
+			return body, nil
+		}
+		lastErr = err
+		// Only transport failures and 5xx responses are worth repeating; a bad
+		// build, an oversized body or a protocol answer will not fix itself.
+		var protocolErr *Error
+		if !errors.As(err, &protocolErr) || !protocolErr.Retryable || ctx.Err() != nil {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+func (c *Client) getOnce(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
@@ -536,6 +564,17 @@ func (c *Client) get(ctx context.Context, rawURL string, limit int64) ([]byte, e
 		return nil, &Error{Code: "upstream_response_too_large", Message: "response exceeds limit"}
 	}
 	return body, nil
+}
+
+func sleepContext(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (c *Client) puzzle(ctx context.Context, data wireChallenge) (Puzzle, error) {
