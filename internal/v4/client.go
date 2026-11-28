@@ -184,12 +184,17 @@ func imageExt(data []byte) string {
 
 // Answer is a solver result expressed without wire knowledge.
 type Answer struct {
-	Kind    string
-	Indices []int
-	Points  [][2]float64
-	Offset  int
-	Cells   [][2]int
-	Text    string
+	Kind     string
+	Indices  []int
+	Points   [][2]float64
+	Offset   int
+	Cells    [][2]int
+	Text     string
+	Layer    int
+	Row      int
+	Col      int
+	Cols     int
+	Passtime int
 }
 
 type wireChallenge struct {
@@ -958,6 +963,11 @@ func answerFields(captchaType string, answer Answer) (map[string]any, *Track, er
 	case "voice":
 		if answer.Kind == "text" {
 			return map[string]any{"userresponse": answer.Text, "passtime": integer(20000, 30000)}, nil, nil
+		}
+	case "svg_seed", "svg_icon":
+		if answer.Kind == "svg" {
+			track, passtime := svgTrack(answer.Row, answer.Col, answer.Cols, answer.Passtime)
+			return map[string]any{"userresponse": []int{answer.Row, answer.Col}, "passtime": passtime}, &track, nil
 		}
 	}
 	return nil, nil, &Error{Code: "answer_type_mismatch", Message: "answer does not match " + captchaType}

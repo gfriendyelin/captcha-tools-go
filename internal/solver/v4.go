@@ -5,9 +5,11 @@ package solver
 import (
 	"context"
 	"fmt"
+	"math/rand"
 
 	"github.com/kafuneri/captcha-tools-go/internal/board"
 	"github.com/kafuneri/captcha-tools-go/internal/inference"
+	"github.com/kafuneri/captcha-tools-go/internal/svgcaptcha"
 	"github.com/kafuneri/captcha-tools-go/internal/v4"
 	"github.com/kafuneri/captcha-tools-go/internal/vision"
 	"github.com/kafuneri/captcha-tools-go/internal/voice"
@@ -49,9 +51,33 @@ func V4(ctx context.Context, registry *inference.Registry, puzzle v4.Puzzle) (v4
 			return v4.Answer{}, err
 		}
 		return v4.Answer{Kind: "text", Text: text}, nil
+	case "svg":
+		result, err := svgcaptcha.Solve(string(puzzle.Question), puzzle.Answers)
+		if err != nil {
+			return v4.Answer{}, err
+		}
+		return v4.Answer{
+			Kind:     "svg",
+			Layer:    result.Layer,
+			Row:      result.Row,
+			Col:      result.Col,
+			Cols:     result.Cols,
+			Passtime: svgPasstime(result.StartMS, result.EndMS),
+		}, nil
 	default:
 		return v4.Answer{}, fmt.Errorf("Unsupported puzzle: %s", puzzle.Kind)
 	}
+}
+
+// svgPasstime picks an interaction time inside the frame's visible window. The
+// window ends up in the track duration, so the click is reported while its
+// frame is on screen.
+func svgPasstime(startMS, endMS int) int {
+	low, high := startMS+50, endMS-50
+	if high > low {
+		return low + rand.Intn(high-low)
+	}
+	return 800 + rand.Intn(700)
 }
 
 func gridIndices(ctx context.Context, registry *inference.Registry, puzzle v4.Puzzle) ([]int, error) {

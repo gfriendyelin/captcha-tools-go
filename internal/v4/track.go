@@ -261,6 +261,27 @@ func boardTrack(cells [][2]int, gomoku bool) (Track, int) {
 	return sequence(targets, 4500, 9000)
 }
 
+// svgTrack builds the single click an SVG grid answer expects. duration is the
+// interaction time taken from the visible window of the answer's frame.
+func svgTrack(row, col, cols, duration int) (Track, int) {
+	if cols < 1 {
+		cols = 1
+	}
+	target := jitter(Point{
+		(float64(col) - 0.5) / float64(cols),
+		(float64(row) - 0.5) / float64(cols),
+	}, 0.01)
+	releaseDelay := integer(80, 120)
+	move := duration - releaseDelay
+	if move < 1 {
+		move = 1
+	}
+	builder := newTrackBuilder(origin())
+	builder.move(target, move).click(releaseDelay)
+	track := payload(builder, trackHeight)
+	return track, int(track.P[len(track.P)-1][0])
+}
+
 func slideTrack(offset int) (Track, int) {
 	x := uniform(0.1, 0.15)
 	duration := integer(600, 1400)
