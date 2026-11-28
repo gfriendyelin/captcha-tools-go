@@ -333,7 +333,13 @@ WORKER_BINARY=./bin/captcha-tools ./bin/captcha-gateway
 
 ## 8. 已知限制
 
-- V4 `svg_seed` / `svg_icon` 目前只完成取题，识别会返回 `Unsupported puzzle: svg`。
+- V4 `svg_seed` / `svg_icon` 已支持识别（纯 Go 渲染 + 边缘模板匹配），目前只在合成样本上验证过，真实站点通过率仍需观察。
 - V4 `voice` 使用 Go 内置语音识别回退，不加载 ONNX 模型。
 - V3 的 `icon` 与 `icon1` 映射保持参考项目行为：`icon` 走 Multi，`icon1` 走 D-FINE。
 - 单容器内 V3/V4 共用一个内存上限；需要独立限制或独立重启时，请使用两个容器。
+
+## 9. 许可证
+
+本项目使用 [No-Sale Permissive License](LICENSE)：可以自由使用、修改、分发，但禁止售卖、出租或以收费（含广告变现）的托管服务形式提供本项目及其衍生作品；分发时需保留版权与许可声明。
+
+`scripts/extract-config.mjs` 与 `internal/svgcaptcha/` 改编自 MIT 许可的 wulu007/geetest-bypass，这部分仍按 MIT 许可分发，详见 [LICENSE](LICENSE) 末尾的第三方声明。
