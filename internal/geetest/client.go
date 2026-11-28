@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	nettransport "github.com/kafuneri/captcha-tools-go/internal/transport"
 )
 
 const (
@@ -175,8 +177,7 @@ func NewClient(gt, challenge string, cfg Config) (*Client, error) {
 		pictureScheme: defaultString(cfg.PictureScheme, "https"),
 	}
 	if cfg.Doer == nil {
-		transport := http.DefaultTransport.(*http.Transport).Clone()
-		transport.ForceAttemptHTTP2 = true
+		transport := nettransport.New()
 		c.transport = transport
 		c.doer = &http.Client{Transport: transport}
 	} else {

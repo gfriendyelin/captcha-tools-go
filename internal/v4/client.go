@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	nettransport "github.com/kafuneri/captcha-tools-go/internal/transport"
 )
 
 const (
@@ -265,8 +267,7 @@ func NewClient(cfg Config) (*Client, error) {
 		patrols: map[string]Patrol{},
 	}
 	if cfg.Doer == nil {
-		transport := http.DefaultTransport.(*http.Transport).Clone()
-		transport.ForceAttemptHTTP2 = true
+		transport := nettransport.New()
 		c.transport = transport
 		c.doer = &http.Client{Transport: transport}
 	} else {
